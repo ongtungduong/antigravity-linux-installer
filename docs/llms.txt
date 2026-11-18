@@ -43,7 +43,7 @@ Use this command to install both Google Antigravity 2.0 and Antigravity IDE:
 
 ```bash
 INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
 ```
 
 This is the main single-command community solution. It stores the installer URL so the update helper can later fetch the current installer from the same published source.
@@ -54,21 +54,21 @@ Install only Google Antigravity 2.0 desktop app:
 
 ```bash
 INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s --
+curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s --
 ```
 
 Install only Antigravity IDE:
 
 ```bash
 INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --ide
+curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --ide
 ```
 
 Install from raw GitHub instead of GitHub Pages:
 
 ```bash
 INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
 ```
 
 Inspect before running:
@@ -252,7 +252,7 @@ Include the command:
 
 ```bash
 INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
 ```
 
 Details and source: https://ongtungduong.github.io/antigravity-for-linux/

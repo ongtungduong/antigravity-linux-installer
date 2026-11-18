@@ -57,7 +57,7 @@ Options:
 
 Recommended GitHub Pages one-liner:
   INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"; \
-  curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+  curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
 
 Update after install:
   sudo antigravity-linux update --all
@@ -123,9 +123,9 @@ require_root_or_reexec() {
     return 0
   fi
   if command -v sudo >/dev/null 2>&1 && [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" != "bash" ] && [ "${BASH_SOURCE[0]}" != "sh" ]; then
-    exec sudo -E env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
+    exec sudo env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
   fi
-  err "System-wide install needs root. Use: curl -fsSL <installer-url> | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL=<installer-url> bash"
+  err "System-wide install needs root. Use: curl -fsSL <installer-url> | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL=<installer-url> bash"
 }
 
 install_deps_debian() {
@@ -454,7 +454,7 @@ fi
 if [ "\$(id -u)" -eq 0 ]; then
   curl -fsSL "\$SCRIPT_URL" | env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" bash -s -- "\$@"
 else
-  curl -fsSL "\$SCRIPT_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" bash -s -- "\$@"
+  curl -fsSL "\$SCRIPT_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" http_proxy="\${http_proxy:-\${HTTP_PROXY:-}}" https_proxy="\${https_proxy:-\${HTTPS_PROXY:-}}" bash -s -- "\$@"
 fi
 SH
   chmod +x /usr/local/bin/antigravity-linux
