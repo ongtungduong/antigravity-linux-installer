@@ -40,11 +40,45 @@ When piped, the script re-runs itself under `sudo` from the same stream, so what
 
 ## Manage
 
+All commands below ask for `sudo` themselves where needed.
+
+**Update everything (desktop app + IDE)**
+
 ```bash
-antigravity-linux update --all   # update (or: update-antigravity, update-antigravity-ide)
-antigravity-linux --status       # show installed apps and versions (works offline)
-antigravity-linux --uninstall    # remove helper-managed files (works offline; user settings are kept)
+antigravity-linux update --all
 ```
+
+**Update the desktop app only**
+
+```bash
+update-antigravity
+```
+
+**Update the IDE only**
+
+```bash
+update-antigravity-ide
+```
+
+**Update behind a proxy** (the helper downloads the installer through your proxy variables)
+
+```bash
+https_proxy=http://HOST:PORT antigravity-linux update --all
+```
+
+**Show installed apps and versions** (works offline)
+
+```bash
+antigravity-linux --status
+```
+
+**Uninstall** (works offline; removes helper-managed files, keeps user settings)
+
+```bash
+antigravity-linux --uninstall
+```
+
+Any [option](#options) can be added to `antigravity-linux update`, e.g. `--force` to reinstall the current version.
 
 ## Options
 
