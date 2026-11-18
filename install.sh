@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Bootstrap for antigravity-linux: downloads the helper, which does the install.
-#   curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- [options]
+#   curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- [options]
 # Set ANTIGRAVITY_LINUX_REF to a tag or commit to install that version of the helper.
 set -euo pipefail
 
 REF="${ANTIGRAVITY_LINUX_REF:-main}"
-HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/$REF/antigravity-linux"
+HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/$REF/antigravity-linux"
 
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 command -v curl >/dev/null 2>&1 || die "curl is required."

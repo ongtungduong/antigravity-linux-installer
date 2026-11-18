@@ -1,4 +1,4 @@
-# Antigravity for Linux
+# Antigravity Linux Installer
 
 One-command installer/updater for **Google Antigravity 2.0** and **Antigravity IDE** on Linux, using Google's official tarballs.
 
@@ -11,30 +11,30 @@ The script asks for `sudo` itself. Pick one:
 **Antigravity 2.0 desktop app only** (default)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash
 ```
 
 **Antigravity IDE only**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --ide
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --ide
 ```
 
 **Both (desktop app + IDE)**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --all
 ```
 
 **Behind a proxy** (add `--proxy` to any of the above)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
 ```
 
 Flags go after `bash -s --`; see [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...).
 
-How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`.
+How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`.
 
 `--proxy http://user:pass@host` credentials are visible in the process list while it runs.
 

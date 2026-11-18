@@ -33,7 +33,7 @@ DO_PRINT_DOWNLOADS=0
 FORCE=0
 DO_UPDATE=0
 HELPER_PATH="/usr/local/bin/antigravity-linux"
-HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/antigravity-linux"
+HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/antigravity-linux"
 PROXY_URL=""
 
 log() { printf '%s\n' "$*"; }
