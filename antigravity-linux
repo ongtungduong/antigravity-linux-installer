@@ -624,7 +624,7 @@ uninstall_all() {
   # Only remove /opt directories this helper created (they carry its version file).
   for d in antigravity antigravity-ide; do
     if [ ! -e "$OPT_DIR/$d" ] || [ -f "$OPT_DIR/$d/$VERSION_FILE_NAME" ]; then
-      rm -rf "$OPT_DIR/$d" "$OPT_DIR/$d.new" "$OPT_DIR/$d.previous"
+      rm -rf "${OPT_DIR:?}/$d" "${OPT_DIR:?}/$d.new" "${OPT_DIR:?}/$d.previous"
     else
       warn "$OPT_DIR/$d was not installed by $PROJECT_NAME; leaving it in place."
     fi
