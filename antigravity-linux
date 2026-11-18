@@ -1,0 +1,578 @@
+#!/usr/bin/env bash
+# antigravity-linux: installs/updates/removes Google Antigravity 2.0 and, optionally,
+# Antigravity IDE on Linux. Resolves the latest official tarballs from
+# https://antigravity.google/download. Installed to /usr/local/bin by install.sh.
+set -euo pipefail
+
+ORIGINAL_ARGS=("$@")
+
+# System-wide changes need root. sudo drops the environment (sudo-rs has no -E),
+# so pass the proxy settings explicitly.
+if [ "$(id -u)" -ne 0 ]; then
+  needs_root=1
+  for a in "$@"; do
+    case "$a" in --status|--print-downloads|-h|--help) needs_root=0 ;; esac
+  done
+  if [ "$needs_root" -eq 1 ]; then
+    command -v sudo >/dev/null 2>&1 || { echo "ERROR: This needs root, and sudo was not found. Run it as root." >&2; exit 1; }
+    exec sudo env "http_proxy=${http_proxy:-${HTTP_PROXY:-}}" "https_proxy=${https_proxy:-${HTTPS_PROXY:-}}" \
+      bash "${BASH_SOURCE[0]}" "$@"
+  fi
+fi
+PROJECT_NAME="antigravity-linux"
+DOWNLOAD_PAGE="https://antigravity.google/download"
+CLI_INSTALLER="https://antigravity.google/cli/install.sh"
+INSTALL_DESKTOP=1
+INSTALL_IDE=0
+INSTALL_CLI=0
+INSTALL_NAUTILUS=1
+INSTALL_DEPS=1
+DO_UNINSTALL=0
+DO_STATUS=0
+DO_PRINT_DOWNLOADS=0
+FORCE=0
+DO_UPDATE=0
+HELPER_PATH="/usr/local/bin/antigravity-linux"
+HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/antigravity-linux"
+PROXY_URL=""
+
+log() { printf '%s\n' "$*"; }
+warn() { printf 'WARN: %s\n' "$*" >&2; }
+err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+need() { command -v "$1" >/dev/null 2>&1 || err "Required command not found: $1"; }
+
+usage() {
+  cat <<'USAGE'
+antigravity-linux: Google Antigravity installer for Linux
+
+Usage:
+  antigravity-linux install [options]    Install (or reinstall) the apps
+  antigravity-linux update [options]     Fetch the latest helper, then install/update
+  antigravity-linux --status
+  antigravity-linux --print-downloads
+  antigravity-linux --uninstall
+
+Default:
+  Installs or updates Antigravity 2.0 desktop app system-wide.
+
+Options:
+  --desktop              Install/update Antigravity 2.0 desktop app only (default)
+  --ide                  Install/update Antigravity IDE only
+  --all                  Install/update Antigravity 2.0 desktop app + Antigravity IDE
+  --cli                  Also run Google's official Antigravity CLI installer
+  --no-nautilus          Skip GNOME Files/Nautilus context-menu helper
+  --no-apt               Do not install apt dependencies automatically
+  --force                Reinstall even when the recorded version matches
+  --proxy URL            Route all downloads through this HTTP(S) proxy
+  --status               Show installed helper-managed apps and versions
+  --print-downloads      Print the resolved official Google tarball URLs
+  --uninstall            Remove helper-managed Antigravity desktop/IDE files
+  -h, --help             Show this help
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    install) ;;
+    update) DO_UPDATE=1 ;;
+    --desktop) INSTALL_DESKTOP=1; INSTALL_IDE=0 ;;
+    --ide) INSTALL_DESKTOP=0; INSTALL_IDE=1 ;;
+    --all) INSTALL_DESKTOP=1; INSTALL_IDE=1 ;;
+    --cli) INSTALL_CLI=1 ;;
+    --no-nautilus) INSTALL_NAUTILUS=0 ;;
+    --no-apt) INSTALL_DEPS=0 ;;
+    --force) FORCE=1 ;;
+    --proxy)
+      shift
+      [ $# -gt 0 ] || err "--proxy needs a URL"
+      PROXY_URL="$1"
+      ;;
+    --status) DO_STATUS=1 ;;
+    --print-downloads) DO_PRINT_DOWNLOADS=1 ;;
+    --uninstall) DO_UNINSTALL=1 ;;
+    -h|--help) usage; exit 0 ;;
+    *) err "Unknown option: $1" ;;
+  esac
+  shift
+done
+
+# Proxy: an explicit --proxy wins; otherwise fill in whichever of the
+# upper/lower-case variables is missing (an empty lowercase value can shadow
+# the uppercase one, and sudo may only pass one of them through).
+if [ -n "$PROXY_URL" ]; then
+  http_proxy="$PROXY_URL"; https_proxy="$PROXY_URL"
+else
+  http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+  https_proxy="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-}}}"
+fi
+if [ -n "$https_proxy" ] || [ -n "$http_proxy" ]; then
+  HTTP_PROXY="$http_proxy"; HTTPS_PROXY="$https_proxy"
+  export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+  case "$http_proxy$https_proxy" in
+    *@*) warn "Proxy credentials are visible to other local users in the process list while the installer runs." ;;
+  esac
+fi
+
+if [ "$(uname -s)" != "Linux" ]; then
+  err "This installer is for Linux only."
+fi
+
+case "$(uname -m)" in
+  x86_64|amd64) AG_PLATFORM="linux-x64"; DESKTOP_TOP="Antigravity-x64" ;;
+  aarch64|arm64) AG_PLATFORM="linux-arm"; DESKTOP_TOP="Antigravity-arm64" ;;
+  *) err "Unsupported CPU architecture: $(uname -m). Google currently provides x64 and ARM64 Linux builds." ;;
+esac
+
+install_deps_debian() {
+  [ "$INSTALL_DEPS" -eq 1 ] || return 0
+  if command -v apt-get >/dev/null 2>&1; then
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update
+    local packages=(ca-certificates curl tar python3 desktop-file-utils xdg-utils)
+    if [ "$INSTALL_NAUTILUS" -eq 1 ] && [ "$INSTALL_IDE" -eq 1 ]; then
+      packages+=(python3-nautilus)
+    fi
+    apt-get install -y "${packages[@]}"
+  else
+    for c in curl tar python3; do need "$c"; done
+  fi
+}
+
+fetch_download_page() {
+  local tmpdir="$1"
+  local html="$tmpdir/download.html"
+  # The download page embeds the tarball URLs directly in its HTML.
+  curl -fsSL --compressed --retry 3 -o "$html" "$DOWNLOAD_PAGE" \
+    || err "Could not download $DOWNLOAD_PAGE. Check your network/DNS (try: getent hosts antigravity.google)."
+  printf '%s\n' "$html"
+}
+
+resolve_download() {
+  local page="$1"
+  local product="$2"
+  python3 - "$page" "$AG_PLATFORM" "$product" <<'PY'
+import html, re, sys
+from pathlib import Path
+from urllib.parse import unquote
+text = html.unescape(Path(sys.argv[1]).read_text(errors='replace'))
+platform = sys.argv[2]
+product = sys.argv[3]
+
+def fail(msg):
+    raise SystemExit(msg)
+
+def version_from_url(url):
+    decoded = unquote(url)
+    # Known current layouts include antigravity-hub/<version>/ and stable/<version>/.
+    for pattern in (r'/antigravity-hub/([^/]+)/', r'/stable/([^/]+)/', r'/(\d+\.\d+\.\d+(?:-[^/]+)?)/'):
+        m = re.search(pattern, decoded)
+        if m:
+            return m.group(1).split('-', 1)[0]
+    return 'unknown'
+
+if product == 'desktop':
+    marker = 'id="antigravity-2"'
+    next_marker = 'id="antigravity-cli"'
+    filename_patterns = [r'Antigravity\.tar\.gz']
+    label = 'Antigravity 2.0'
+elif product == 'ide':
+    marker = 'id="antigravity-ide"'
+    next_marker = 'id="antigravity-sdk"'
+    filename_patterns = [r'Antigravity%20IDE\.tar\.gz', r'Antigravity\+IDE\.tar\.gz', r'Antigravity IDE\.tar\.gz']
+    label = 'Antigravity IDE'
+else:
+    fail(f'Unknown product: {product}')
+
+sections = []
+start = text.find(marker)
+if start != -1:
+    end = text.find(next_marker, start)
+    sections.append(text[start:end if end != -1 else None])
+sections.append(text)
+
+for section in sections:
+    for filename_re in filename_patterns:
+        # HTTPS only, and only Google-owned download hosts.
+        pattern = r'https://(?:[\w-]+\.)*(?:googleapis\.com|gvt1\.com|google\.com|googleusercontent\.com)/[^"\'\s<>)]*/' + re.escape(platform) + r'/' + filename_re
+        matches = re.findall(pattern, section)
+        if matches:
+            url = matches[-1]
+            print(version_from_url(url), url)
+            sys.exit(0)
+
+fail(f'Could not find official {label} tarball for {platform} on the Google download page')
+PY
+}
+
+resolve_desktop_download() { resolve_download "$1" desktop; }
+resolve_ide_download() { resolve_download "$1" ide; }
+
+asar_extract_icon_png() {
+  local asar="$1"
+  local out="$2"
+  python3 - "$asar" "$out" <<'PY'
+import json, struct, sys
+from pathlib import Path
+asar = Path(sys.argv[1])
+out = Path(sys.argv[2])
+with asar.open('rb') as f:
+    f.read(4)
+    header_size = struct.unpack('<I', f.read(4))[0]
+    f.read(4)
+    json_size = struct.unpack('<I', f.read(4))[0]
+    header = json.loads(f.read(json_size).decode())
+icon = header.get('files', {}).get('icon.png')
+if not icon:
+    raise SystemExit('icon.png not found in app.asar')
+with asar.open('rb') as f:
+    f.seek(8 + header_size + int(icon['offset']))
+    out.write_bytes(f.read(int(icon['size'])))
+PY
+}
+
+safe_replace_dir() {
+  local newdir="$1"
+  local target="$2"
+  rm -rf "${target}.previous"
+  if [ -d "$target" ]; then
+    mv "$target" "${target}.previous"
+  fi
+  mv "$newdir" "$target"
+}
+
+fix_chrome_sandbox() {
+  local sandbox="$1"
+  if [ -f "$sandbox" ]; then
+    chown root:root "$sandbox"
+    chmod 4755 "$sandbox"
+  fi
+}
+
+refresh_desktop_caches() {
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+  fi
+  if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q /usr/share/icons/hicolor >/dev/null 2>&1 || true
+  fi
+}
+
+installed_version() {
+  local file="$1"
+  cat "$file" 2>/dev/null || true
+}
+
+install_desktop_app() {
+  local tmpdir="$1"
+  local page="$2"
+  local version url
+  read -r version url < <(resolve_desktop_download "$page")
+  local root="/opt/antigravity"
+  local target="$root/$DESKTOP_TOP/antigravity"
+  local version_file="$root/.antigravity-linux-version"
+  if [ "$FORCE" -eq 0 ] && [ -x "$target" ] && [ "$(installed_version "$version_file")" = "$version" ]; then
+    log "Antigravity 2.0 $version is already installed."
+    return
+  fi
+
+  log "Downloading Antigravity 2.0 $version for $AG_PLATFORM from Google..."
+  local archive="$tmpdir/Antigravity.tar.gz"
+  curl -fsSL --retry 3 -o "$archive" "$url"
+  local top_dir="$DESKTOP_TOP" extract="$tmpdir/desktop"
+  mkdir -p "$extract"
+  tar -xzf "$archive" -C "$extract"
+  [ -x "$extract/$top_dir/antigravity" ] || err "Unexpected Antigravity archive layout: $top_dir/antigravity not found."
+
+  local icon_staged="$tmpdir/antigravity.png"
+  if [ -f "$extract/$top_dir/resources/app.asar" ]; then
+    asar_extract_icon_png "$extract/$top_dir/resources/app.asar" "$icon_staged" || warn "Could not extract desktop icon; continuing."
+  fi
+
+  rm -rf "${root}.new"
+  mkdir -p "${root}.new"
+  mv "$extract/$top_dir" "${root}.new/"
+  printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
+  printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
+  fix_chrome_sandbox "${root}.new/$top_dir/chrome-sandbox"
+  safe_replace_dir "${root}.new" "$root"
+
+  ln -sfn "$root/$top_dir/antigravity" /usr/local/bin/antigravity
+  mkdir -p /usr/share/icons/hicolor/512x512/apps /usr/share/applications
+  if [ -f "$icon_staged" ]; then
+    install -m 0644 "$icon_staged" /usr/share/icons/hicolor/512x512/apps/antigravity.png
+  fi
+  cat > /usr/share/applications/antigravity.desktop <<DESKTOP
+[Desktop Entry]
+Name=Antigravity
+Comment=Google Antigravity 2.0 agent platform
+Exec=/usr/local/bin/antigravity %U
+Icon=antigravity
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+StartupNotify=true
+StartupWMClass=Antigravity
+DESKTOP
+  refresh_desktop_caches
+  log "Installed Antigravity 2.0 $version at $root/$top_dir"
+}
+
+install_ide_app() {
+  local tmpdir="$1"
+  local page="$2"
+  local version url
+  read -r version url < <(resolve_ide_download "$page")
+  local root="/opt/antigravity-ide"
+  local install_dir="Antigravity-IDE"
+  local version_file="$root/.antigravity-linux-version"
+  if [ "$FORCE" -eq 0 ] && [ -x "$root/$install_dir/antigravity-ide" ] && [ "$(installed_version "$version_file")" = "$version" ]; then
+    log "Antigravity IDE $version is already installed."
+    return
+  fi
+
+  log "Downloading Antigravity IDE $version for $AG_PLATFORM from Google..."
+  local archive="$tmpdir/Antigravity-IDE.tar.gz"
+  curl -fsSL --retry 3 -o "$archive" "$url"
+  local top_dir="Antigravity IDE" extract="$tmpdir/ide"
+  mkdir -p "$extract"
+  tar -xzf "$archive" -C "$extract"
+  [ -x "$extract/$top_dir/antigravity-ide" ] || err "Unexpected Antigravity IDE archive layout: $top_dir/antigravity-ide not found."
+
+  rm -rf "${root}.new"
+  mkdir -p "${root}.new/$install_dir"
+  cp -a "$extract/$top_dir/." "${root}.new/$install_dir/"
+  printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
+  printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
+  fix_chrome_sandbox "${root}.new/$install_dir/chrome-sandbox"
+  safe_replace_dir "${root}.new" "$root"
+
+  ln -sfn "$root/$install_dir/antigravity-ide" /usr/local/bin/antigravity-ide
+  mkdir -p /usr/share/icons/hicolor/512x512/apps /usr/share/applications
+  local icon_source="$root/$install_dir/resources/app/resources/linux/code.png"
+  if [ -f "$icon_source" ]; then
+    install -m 0644 "$icon_source" /usr/share/icons/hicolor/512x512/apps/antigravity-ide.png
+  fi
+  cat > /usr/share/applications/antigravity-ide.desktop <<DESKTOP
+[Desktop Entry]
+Name=Antigravity IDE
+Comment=Google Antigravity IDE
+Exec=/usr/local/bin/antigravity-ide %F
+Icon=antigravity-ide
+Terminal=false
+Type=Application
+Categories=Development;IDE;
+MimeType=inode/directory;text/plain;application/x-code-workspace;application/x-antigravity-workspace;x-scheme-handler/antigravity-ide;
+StartupNotify=true
+StartupWMClass=antigravity-ide
+DESKTOP
+  refresh_desktop_caches
+  log "Installed Antigravity IDE $version at $root/$install_dir"
+}
+
+install_nautilus_extension() {
+  [ "$INSTALL_NAUTILUS" -eq 1 ] || return 0
+  [ "$INSTALL_IDE" -eq 1 ] || return 0
+  if ! command -v nautilus >/dev/null 2>&1; then
+    return 0
+  fi
+  if ! python3 - <<'PY' >/dev/null 2>&1
+try:
+    import gi
+    gi.require_version('Nautilus', '4.0')
+except Exception:
+    raise SystemExit(1)
+PY
+  then
+    warn "Skipping Nautilus extension because Python Nautilus bindings are unavailable."
+    return 0
+  fi
+  mkdir -p /usr/share/nautilus-python/extensions
+  cat > /usr/share/nautilus-python/extensions/open-in-antigravity-ide.py <<'PY'
+import subprocess
+from urllib.parse import unquote, urlparse
+from gi.repository import Nautilus, GObject
+
+class OpenInAntigravityIDE(GObject.GObject, Nautilus.MenuProvider):
+    def _path(self, file_info):
+        uri = file_info.get_uri()
+        parsed = urlparse(uri)
+        if parsed.scheme != 'file':
+            return None
+        return unquote(parsed.path)
+
+    def get_file_items(self, files):
+        if not files or len(files) != 1:
+            return []
+        path = self._path(files[0])
+        if not path:
+            return []
+        item = Nautilus.MenuItem(
+            name='OpenInAntigravityIDE::open',
+            label='Open in Antigravity IDE',
+            tip='Open this folder or file in Antigravity IDE'
+        )
+        item.connect('activate', lambda _item: subprocess.Popen(['antigravity-ide', path]))
+        return [item]
+
+    def get_background_items(self, folder):
+        path = self._path(folder)
+        if not path:
+            return []
+        item = Nautilus.MenuItem(
+            name='OpenInAntigravityIDE::open_background',
+            label='Open Folder in Antigravity IDE',
+            tip='Open the current folder in Antigravity IDE'
+        )
+        item.connect('activate', lambda _item: subprocess.Popen(['antigravity-ide', path]))
+        return [item]
+PY
+  log "Installed Nautilus context-menu helper. Restart Files/Nautilus to see it."
+}
+
+install_helper() {
+  # Make sure this script is the installed helper (also when run from a checkout).
+  local self
+  self=$(readlink -f "${BASH_SOURCE[0]}")
+  if [ "$self" != "$(readlink -f "$HELPER_PATH" 2>/dev/null || true)" ]; then
+    install -m 0755 "$self" "$HELPER_PATH.new"
+    mv -f "$HELPER_PATH.new" "$HELPER_PATH"
+  fi
+  printf '#!/usr/bin/env bash\nexec antigravity-linux update --desktop "$@"\n' > /usr/local/bin/update-antigravity
+  printf '#!/usr/bin/env bash\nexec antigravity-linux update --ide "$@"\n' > /usr/local/bin/update-antigravity-ide
+  chmod +x /usr/local/bin/update-antigravity /usr/local/bin/update-antigravity-ide
+}
+
+self_update() {
+  need curl
+  local tmp args=() a
+  tmp=$(mktemp "${TMPDIR:-/tmp}/$PROJECT_NAME.XXXXXX")
+  curl -fsSL --retry 3 -o "$tmp" "$HELPER_URL" || { rm -f "$tmp"; err "Could not download $HELPER_URL"; }
+  bash -n "$tmp" || { rm -f "$tmp"; err "Downloaded helper is not valid; aborting update."; }
+  install -m 0755 "$tmp" "$HELPER_PATH.new"
+  mv -f "$HELPER_PATH.new" "$HELPER_PATH"
+  rm -f "$tmp"
+  for a in "${ORIGINAL_ARGS[@]}"; do [ "$a" = "update" ] || args+=("$a"); done
+  exec "$HELPER_PATH" install "${args[@]}"
+}
+
+install_cli() {
+  log "Running Google's official Antigravity CLI installer for the non-root user..."
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+    # sudo resets the environment, so hand the proxy to the user's shell explicitly.
+    local env_args=()
+    [ -z "${http_proxy:-}" ] || env_args+=("http_proxy=$http_proxy")
+    [ -z "${https_proxy:-}" ] || env_args+=("https_proxy=$https_proxy")
+    sudo -u "$SUDO_USER" -H env "${env_args[@]}" bash -lc "curl -fsSL '$CLI_INSTALLER' | bash"
+  else
+    curl -fsSL "$CLI_INSTALLER" | bash
+  fi
+}
+
+print_status() {
+  log "Antigravity Linux status"
+  if [ -x /usr/local/bin/antigravity ]; then
+    log "- Antigravity 2.0: installed ($(installed_version /opt/antigravity/.antigravity-linux-version))"
+    log "  Command: /usr/local/bin/antigravity"
+  else
+    log "- Antigravity 2.0: not installed by this helper"
+  fi
+  if [ -x /usr/local/bin/antigravity-ide ]; then
+    log "- Antigravity IDE: installed ($(installed_version /opt/antigravity-ide/.antigravity-linux-version))"
+    log "  Command: /usr/local/bin/antigravity-ide"
+  else
+    log "- Antigravity IDE: not installed by this helper"
+  fi
+  if [ -x /usr/local/bin/antigravity-linux ]; then
+    log "- Update helper: installed"
+  else
+    log "- Update helper: not installed"
+  fi
+}
+
+print_downloads() {
+  need curl
+  need python3
+  local tmp_parent="${TMPDIR:-/tmp}"
+  local tmpdir
+  tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
+  trap "rm -rf '$tmpdir'" EXIT
+  local page
+  page=$(fetch_download_page "$tmpdir")
+  if [ "$INSTALL_DESKTOP" -eq 1 ]; then
+    local version url
+    read -r version url < <(resolve_desktop_download "$page")
+    log "Antigravity 2.0 $version: $url"
+  fi
+  if [ "$INSTALL_IDE" -eq 1 ]; then
+    local version url
+    read -r version url < <(resolve_ide_download "$page")
+    log "Antigravity IDE $version: $url"
+  fi
+}
+
+print_success_summary() {
+  log ""
+  log "Antigravity Linux install complete."
+  log ""
+  log "Installed:"
+  if [ "$INSTALL_DESKTOP" -eq 1 ]; then
+    log "- Antigravity 2.0: /usr/local/bin/antigravity"
+  fi
+  if [ "$INSTALL_IDE" -eq 1 ]; then
+    log "- Antigravity IDE: /usr/local/bin/antigravity-ide"
+  fi
+  log ""
+  log "Manage:"
+  log "- Status:    antigravity-linux --status"
+  log "- Update:    antigravity-linux update --all"
+  log "- Uninstall: antigravity-linux --uninstall"
+  if [ "$INSTALL_IDE" -eq 1 ]; then
+    log ""
+    log "Folder open integration: use your file manager's Open With menu, or Nautilus context menu after restarting Files."
+  fi
+}
+
+uninstall_all() {
+  rm -rf /opt/antigravity /opt/antigravity.new /opt/antigravity.previous /opt/antigravity-ide /opt/antigravity-ide.new /opt/antigravity-ide.previous
+  rm -f /usr/local/bin/antigravity /usr/local/bin/antigravity-ide /usr/local/bin/update-antigravity /usr/local/bin/update-antigravity-ide /usr/local/bin/antigravity-linux
+  rm -f /usr/share/applications/antigravity.desktop /usr/share/applications/antigravity-ide.desktop
+  rm -f /usr/share/icons/hicolor/512x512/apps/antigravity.png /usr/share/icons/hicolor/512x512/apps/antigravity-ide.png
+  rm -f /usr/share/nautilus-python/extensions/open-in-antigravity-ide.py
+  refresh_desktop_caches
+  log "Removed helper-managed Antigravity files. User settings under home directories were left untouched."
+}
+
+main() {
+  if [ "$DO_STATUS" -eq 1 ]; then
+    print_status
+    exit 0
+  fi
+  if [ "$DO_PRINT_DOWNLOADS" -eq 1 ]; then
+    print_downloads
+    exit 0
+  fi
+  if [ "$DO_UNINSTALL" -eq 1 ]; then
+    uninstall_all
+    exit 0
+  fi
+
+  [ "$DO_UPDATE" -eq 0 ] || self_update
+  install_deps_debian
+  local tmp_parent="${TMPDIR:-/var/tmp}"
+  mkdir -p "$tmp_parent"
+  local tmpdir
+  tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
+  trap "rm -rf '$tmpdir'" EXIT
+  local page
+  page=$(fetch_download_page "$tmpdir")
+  [ "$INSTALL_DESKTOP" -eq 1 ] && install_desktop_app "$tmpdir" "$page"
+  [ "$INSTALL_IDE" -eq 1 ] && install_ide_app "$tmpdir" "$page"
+  install_nautilus_extension
+  install_helper
+  if [ "$INSTALL_CLI" -eq 1 ]; then
+    install_cli || warn "Antigravity CLI installer failed; the desktop/IDE install is complete."
+  fi
+  print_success_summary
+}
+
+main "$@"

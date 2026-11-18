@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n install.sh
-      - run: bash install.sh --status
+      - run: bash -n install.sh antigravity-linux
+      - run: bash antigravity-linux --status
       - name: Resolve official download URLs
-        run: bash install.sh --all --print-downloads
+        run: bash antigravity-linux --all --print-downloads

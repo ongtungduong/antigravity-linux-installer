@@ -34,9 +34,9 @@ curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/
 
 Flags go after `bash -s --`; see [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...).
 
-Prefer to read it first? Download `install.sh`, review it, then run `bash install.sh --all`.
+How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`.
 
-When piped, the script re-runs itself under `sudo` from the same stream, so what runs as root is exactly what you piped (pin a tag or commit in the URL to install a reviewed version). `--proxy http://user:pass@host` credentials are visible in the process list while it runs.
+`--proxy http://user:pass@host` credentials are visible in the process list while it runs.
 
 ## Manage
 
@@ -47,6 +47,8 @@ All commands below ask for `sudo` themselves where needed.
 ```bash
 antigravity-linux update --all
 ```
+
+`update` first downloads the latest helper (rejecting it if it is not valid shell), then installs.
 
 **Update the desktop app only**
 
@@ -60,7 +62,7 @@ update-antigravity
 update-antigravity-ide
 ```
 
-**Update behind a proxy** (the helper downloads the installer through your proxy variables)
+**Update behind a proxy** (the helper downloads itself through your proxy variables)
 
 ```bash
 https_proxy=http://HOST:PORT antigravity-linux update --all
@@ -91,7 +93,6 @@ Any [option](#options) can be added to `antigravity-linux update`, e.g. `--force
 --no-apt           Do not install apt dependencies automatically
 --force            Reinstall even when the recorded version matches
 --proxy URL        Route all downloads through this HTTP(S) proxy
---install-url URL  Store URL used by the antigravity-linux update command
 --status           Show installed helper-managed apps and versions
 --print-downloads  Print resolved official Google tarball URLs
 --uninstall        Remove helper-managed installation
