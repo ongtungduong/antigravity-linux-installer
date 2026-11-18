@@ -6,22 +6,33 @@ One-command installer/updater for **Google Antigravity 2.0** and **Antigravity I
 
 ## Install
 
+The script asks for `sudo` itself. Pick one:
+
+**Antigravity 2.0 desktop app only** (default)
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash
 ```
 
-The script asks for `sudo` itself and installs the Antigravity 2.0 desktop app. Pass flags after `bash -s --`:
+**Antigravity IDE only**
 
 ```bash
-# Desktop app + IDE
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
-
-# IDE only
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --ide
+```
 
-# Behind a proxy
+**Both (desktop app + IDE)**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
+```
+
+**Behind a proxy** (add `--proxy` to any of the above)
+
+```bash
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
 ```
+
+Flags go after `bash -s --`; see [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...).
 
 Prefer to read it first? Download `install.sh`, review it, then run `bash install.sh --all`.
 
