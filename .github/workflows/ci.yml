@@ -4,16 +4,45 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
   schedule:
     # Daily: catches Google changing the download page the installer parses.
     - cron: "17 3 * * *"
 
+permissions:
+  contents: read
+
 jobs:
-  check:
+  test:
+    name: Lint and offline tests
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-      - run: bash -n install.sh antigravity-linux
+      # One invocation per file: `bash -n a b` only checks `a` and treats `b` as its argument.
+      - name: Syntax
+        run: |
+          bash -n install.sh
+          bash -n antigravity-linux
+          bash -n tests/run.sh
+      - name: ShellCheck
+        run: shellcheck -S warning install.sh antigravity-linux
+      - name: Tests
+        run: bash tests/run.sh
+
+  live:
+    name: Google download page
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
       - run: bash antigravity-linux --status
       - name: Resolve official download URLs
-        run: bash antigravity-linux --all --print-downloads
+        run: |
+          out=$(bash antigravity-linux --all --print-downloads)
+          printf '%s\n' "$out"
+          # "unknown" means the URL layout changed and versions can no longer be compared.
+          if grep -q ' unknown:' <<<"$out"; then
+            echo "::error::Could not read a version from the download URLs; update version_from_url."
+            exit 1
+          fi
