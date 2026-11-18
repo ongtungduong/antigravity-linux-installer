@@ -6,35 +6,27 @@ One-command installer/updater for **Google Antigravity 2.0** and **Antigravity I
 
 ## Install
 
-The script asks for `sudo` itself. Pick one:
-
-**Antigravity 2.0 desktop app only** (default)
+One script does everything. Download it from the latest release, check it, and run it with `sudo`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash
+curl -fsSLO https://github.com/ongtungduong/antigravity-linux-installer/releases/latest/download/antigravity-linux
+curl -fsSLO https://github.com/ongtungduong/antigravity-linux-installer/releases/latest/download/SHA256SUMS
+sha256sum -c SHA256SUMS
+sudo bash antigravity-linux install
 ```
 
-**Antigravity IDE only**
+Choose what to install by adding an option after `install`:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --ide
-```
+| Goal | Command |
+|---|---|
+| Antigravity 2.0 desktop app only (default) | `sudo bash antigravity-linux install` |
+| Antigravity IDE only | `sudo bash antigravity-linux install --ide` |
+| Both | `sudo bash antigravity-linux install --all` |
+| Behind a proxy | `sudo bash antigravity-linux install --all --proxy http://HOST:PORT` |
 
-**Both (desktop app + IDE)**
+See [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...). You can also run it without `sudo` and it will ask for it itself.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --all
-```
-
-**Behind a proxy** (add `--proxy` to any of the above)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
-```
-
-Flags go after `bash -s --`; see [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...).
-
-How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`. `update` follows `main` unless `ANTIGRAVITY_LINUX_REF` is set again, e.g. `ANTIGRAVITY_LINUX_REF=<tag> antigravity-linux update --all`.
+The script keeps a copy in `/usr/local/bin/antigravity-linux`, so after the first run you can delete the download and use `antigravity-linux ...` for everything below.
 
 `--proxy http://user:pass@host` credentials are visible in the process list while it runs.
 
@@ -48,7 +40,15 @@ All commands below ask for `sudo` themselves where needed.
 antigravity-linux update --all
 ```
 
-`update` first downloads the latest helper (rejecting it if it is not valid shell), then installs. If the recorded version already matches, nothing is downloaded and `apt` is only touched when a dependency is actually missing.
+`update` looks up the latest release of this script, downloads `antigravity-linux` and `SHA256SUMS` from it, and replaces the installed copy **only if the checksum matches and the file is valid shell**. It then installs/updates the apps with the new copy. If the script is already the latest it goes straight to the apps, and an app whose version matches Google's current one is not downloaded again. `apt` is only touched when a dependency is missing.
+
+**Nothing new means nothing to do.** A scheduled workflow ([`google-versions.yml`](.github/workflows/google-versions.yml)) reads Google's download page once a day and publishes the latest versions to [`versions.txt`](https://github.com/ongtungduong/antigravity-linux-installer/blob/google-versions/versions.txt) on the `google-versions` branch, committing only when something changed (so the branch history is a change log). `update` reads that small file first and, if every selected app is already at those versions, stops right there: no `apt`, no Google page, no download. The list is only used to skip work. What gets installed is always resolved from Google's page at install time, and if the list is unreachable `update` simply continues the normal way. It can lag Google by up to a day: use `--no-cache` to ask Google directly. `--force` and `--cli` also skip the shortcut, and `install` never uses it.
+
+**Stay on a reviewed version** by pinning a release tag; without it `update` always takes the latest release:
+
+```bash
+ANTIGRAVITY_LINUX_REF=v1.2.3 antigravity-linux update --all
+```
 
 **Update the desktop app only**
 
@@ -62,7 +62,7 @@ update-antigravity
 update-antigravity-ide
 ```
 
-**Update behind a proxy** (the helper downloads itself through your proxy variables)
+**Update behind a proxy** (downloads use your proxy variables)
 
 ```bash
 https_proxy=http://HOST:PORT antigravity-linux update --all
@@ -72,6 +72,12 @@ https_proxy=http://HOST:PORT antigravity-linux update --all
 
 ```bash
 antigravity-linux --status
+```
+
+**Show the script version**
+
+```bash
+antigravity-linux --version
 ```
 
 **Uninstall** (works offline; removes helper-managed files, keeps user settings)
@@ -92,9 +98,11 @@ Any [option](#options) can be added to `antigravity-linux update`, e.g. `--force
 --no-nautilus      Skip GNOME Files/Nautilus context-menu helper
 --no-apt           Do not install apt dependencies automatically
 --force            Reinstall even when the recorded version matches
+--no-cache         On update, ask Google directly instead of the published version list
 --proxy URL        Route all downloads through this HTTP(S) proxy
 --status           Show installed helper-managed apps and versions
 --print-downloads  Print resolved official Google tarball URLs
+--version          Print the version of this script
 --uninstall        Remove helper-managed installation
 ```
 
@@ -130,7 +138,17 @@ Safety rails:
 bash tests/run.sh
 ```
 
-The suite is offline and needs no root: `curl`, `sudo`, `apt-get` and friends are stubbed, and every install path is redirected into a temporary directory. CI also runs `shellcheck` and, daily, resolves the real download URLs from Google.
+The suite is offline and needs no root: `curl`, `sudo`, `apt-get` and friends are stubbed, and every install path is redirected into a temporary directory. CI also runs `shellcheck` and resolves the real download URLs from Google. `tools/google-versions.sh` prints the latest versions (what the scheduled workflow publishes); a failed `Google versions` run means Google changed the page layout and the parser in `antigravity-linux` needs updating.
+
+### Releasing
+
+The script reports `dev` in a checkout (`VERSION="dev"`). To release, push a tag from `main`:
+
+```bash
+git tag v1.2.3 && git push origin v1.2.3
+```
+
+The [release workflow](.github/workflows/release.yml) checks that the tag looks like `vX.Y.Z` and is on `main`, runs the tests, stamps the tag into the script, and publishes a GitHub Release with `antigravity-linux` and `SHA256SUMS`.
 
 ## License
 

@@ -1,0 +1,50 @@
+name: Google versions
+
+# Watches Google's download page and keeps the latest versions in
+# `versions.txt` on the `google-versions` branch (a commit only when something
+# changed, so the branch history is the change log). `antigravity-linux update`
+# reads that file to skip the work when everything is already current.
+# A failed run means the page layout changed and the parser needs attention.
+on:
+  schedule:
+    - cron: "23 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: google-versions
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read versions from Google
+        run: bash tools/google-versions.sh | tee versions.txt
+      - name: Publish if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git ls-remote --exit-code --heads origin google-versions >/dev/null 2>&1; then
+            git fetch --depth=1 origin google-versions
+            git worktree add pub FETCH_HEAD
+          else
+            git worktree add --detach pub
+            git -C pub checkout --orphan google-versions
+            git -C pub rm -rfq .
+          fi
+          cp versions.txt pub/versions.txt
+          cd pub
+          git add versions.txt
+          if git diff --cached --quiet; then
+            echo "No change in Google's versions."
+            exit 0
+          fi
+          changes=$(git diff --cached --unified=0 versions.txt | grep -E '^[+-][^+-]' || true)
+          { echo "### Google versions changed"; echo '```'; echo "$changes"; echo '```'; } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+          git commit -q -m "Update Google versions" -m "$changes"
+          git push origin HEAD:google-versions

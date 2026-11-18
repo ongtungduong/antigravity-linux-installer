@@ -1,0 +1,48 @@
+name: Release
+
+# Push a tag like v1.2.3 (from main) to publish antigravity-linux and SHA256SUMS.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check the tag
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag must look like v1.2.3, got $GITHUB_REF_NAME"; exit 1
+          fi
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $GITHUB_REF_NAME is not on main"; exit 1
+          fi
+      - name: Lint and test
+        run: |
+          bash -n antigravity-linux
+          bash -n tests/run.sh
+          bash -n tools/google-versions.sh
+          shellcheck -S warning antigravity-linux tools/google-versions.sh
+          bash tests/run.sh
+      - name: Build release assets
+        run: |
+          mkdir dist
+          sed "s/^VERSION=\"dev\"\$/VERSION=\"$GITHUB_REF_NAME\"/" antigravity-linux > dist/antigravity-linux
+          chmod 0755 dist/antigravity-linux
+          # The stamp must have landed, and the stamped file must still be valid shell.
+          bash -n dist/antigravity-linux
+          test "$(bash dist/antigravity-linux --version)" = "antigravity-linux $GITHUB_REF_NAME"
+          (cd dist && sha256sum antigravity-linux > SHA256SUMS && sha256sum -c SHA256SUMS)
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/antigravity-linux dist/SHA256SUMS \
+            --verify-tag --generate-notes --title "$GITHUB_REF_NAME"

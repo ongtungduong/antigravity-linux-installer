@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # antigravity-linux: installs/updates/removes Google Antigravity 2.0 and, optionally,
 # Antigravity IDE on Linux. Resolves the latest official tarballs from
-# https://antigravity.google/download. Installed to /usr/local/bin by install.sh.
+# https://antigravity.google/download.
+#
+# One file does everything. Download it from the latest GitHub Release and run
+# `sudo bash antigravity-linux install`; it keeps a copy in /usr/local/bin and
+# `antigravity-linux update` later replaces that copy with the newest release.
 set -euo pipefail
 
 PROJECT_NAME="antigravity-linux"
@@ -16,6 +20,7 @@ DO_UNINSTALL=0
 DO_STATUS=0
 DO_PRINT_DOWNLOADS=0
 FORCE=0
+USE_CACHE=1
 DO_UPDATE=0
 PROXY_URL=""
 
@@ -26,10 +31,15 @@ SHARE_DIR="/usr/share"
 HELPER_PATH="$BIN_DIR/antigravity-linux"
 VERSION_FILE_NAME=".antigravity-linux-version"
 
-# Which revision of this helper `update` downloads. Pin with ANTIGRAVITY_LINUX_REF
-# (a tag or commit); sudo is told to keep it (see ensure_root).
-REPO_RAW="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer"
-HELPER_REF="${ANTIGRAVITY_LINUX_REF:-main}"
+# Stamped with the release tag by .github/workflows/release.yml; "dev" in a checkout.
+VERSION="dev"
+RELEASES_URL="https://github.com/ongtungduong/antigravity-linux-installer/releases"
+# Release tag `update` installs; empty means the latest release. Pin it with
+# ANTIGRAVITY_LINUX_REF=v1.2.3 (sudo is told to keep it, see ensure_root).
+HELPER_REF="${ANTIGRAVITY_LINUX_REF:-}"
+# Latest Google versions, refreshed by .github/workflows/google-versions.yml. Used
+# only to skip an update that has nothing to do; it never chooses what is installed.
+VERSIONS_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/google-versions/versions.txt"
 
 # Every download gets a connect timeout and a total time limit, so a stalled
 # connection cannot hang an install (or the daily CI run) forever.
@@ -47,9 +57,34 @@ fetch() {
   curl "${CURL_COMMON[@]}" --max-time "$max" "$@" -o "$out" "$url"
 }
 
-helper_url() {
-  [[ "$HELPER_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || err "Invalid ANTIGRAVITY_LINUX_REF: '$HELPER_REF' (use a tag or commit name)."
-  printf '%s/%s/antigravity-linux\n' "$REPO_RAW" "$HELPER_REF"
+valid_tag() { [[ "$1" =~ ^v[0-9][A-Za-z0-9._-]*$ ]]; }
+
+# The /releases/latest page redirects to /releases/tag/<tag>: no API token or rate limit.
+latest_release_tag() {
+  local url tag
+  url=$(curl "${CURL_COMMON[@]}" --max-time 60 -o /dev/null -w '%{url_effective}' "$RELEASES_URL/latest") \
+    || err "Could not look up the latest release of $PROJECT_NAME."
+  tag="${url##*/}"
+  valid_tag "$tag" || err "Unexpected release URL: $url"
+  printf '%s\n' "$tag"
+}
+
+target_release_tag() {
+  if [ -z "$HELPER_REF" ]; then
+    latest_release_tag
+  else
+    valid_tag "$HELPER_REF" || err "Invalid ANTIGRAVITY_LINUX_REF: '$HELPER_REF' (use a release tag such as v1.0.0)."
+    printf '%s\n' "$HELPER_REF"
+  fi
+}
+
+# verify_checksum FILE NAME SUMS_FILE: NAME must be listed in SUMS_FILE and match.
+verify_checksum() {
+  local expected actual
+  expected=$(awk -v n="$2" '$2 == n || $2 == "*" n {print $1; exit}' "$3")
+  [ -n "$expected" ] || return 1
+  actual=$(sha256sum "$1" | awk '{print $1}')
+  [ "$expected" = "$actual" ]
 }
 
 # Files written by root must be readable by everybody: sudo keeps a stricter
@@ -62,7 +97,7 @@ antigravity-linux: Google Antigravity installer for Linux
 
 Usage:
   antigravity-linux install [options]    Install (or reinstall) the apps
-  antigravity-linux update [options]     Fetch the latest helper, then install/update
+  antigravity-linux update [options]     Fetch the latest release of this script, then install/update
   antigravity-linux --status
   antigravity-linux --print-downloads
   antigravity-linux --uninstall
@@ -78,9 +113,11 @@ Options:
   --no-nautilus          Skip GNOME Files/Nautilus context-menu helper
   --no-apt               Do not install apt dependencies automatically
   --force                Reinstall even when the recorded version matches
+  --no-cache             On update, ask Google directly instead of the published version list
   --proxy URL            Route all downloads through this HTTP(S) proxy
   --status               Show installed helper-managed apps and versions
   --print-downloads      Print the resolved official Google tarball URLs
+  --version              Print the version of this script
   --uninstall            Remove helper-managed Antigravity desktop/IDE files
   -h, --help             Show this help
 USAGE
@@ -92,8 +129,9 @@ ensure_root() {
   [ "$(id -u)" -ne 0 ] || return 0
   local a
   for a in "$@"; do
-    case "$a" in --status|--print-downloads|-h|--help) return 0 ;; esac
+    case "$a" in --status|--print-downloads|--version|-h|--help) return 0 ;; esac
   done
+  [ -f "${BASH_SOURCE[0]:-}" ] || err "Root is needed, but this script was piped in. Save it to a file and run it from there."
   command -v sudo >/dev/null 2>&1 || { echo "ERROR: This needs root, and sudo was not found. Run it as root." >&2; exit 1; }
   exec sudo env "http_proxy=${http_proxy:-${HTTP_PROXY:-}}" "https_proxy=${https_proxy:-${HTTPS_PROXY:-}}" \
     "no_proxy=${no_proxy:-${NO_PROXY:-}}" "ANTIGRAVITY_LINUX_REF=${ANTIGRAVITY_LINUX_REF:-}" \
@@ -112,6 +150,7 @@ parse_args() {
       --no-nautilus) INSTALL_NAUTILUS=0 ;;
       --no-apt) INSTALL_DEPS=0 ;;
       --force) FORCE=1 ;;
+      --no-cache) USE_CACHE=0 ;;
       --proxy)
         shift
         [ $# -gt 0 ] || err "--proxy needs a URL"
@@ -119,6 +158,7 @@ parse_args() {
         ;;
       --status) DO_STATUS=1 ;;
       --print-downloads) DO_PRINT_DOWNLOADS=1 ;;
+      --version) printf 'antigravity-linux %s\n' "$VERSION"; exit 0 ;;
       --uninstall) DO_UNINSTALL=1 ;;
       -h|--help) usage; exit 0 ;;
       *) err "Unknown option: $1" ;;
@@ -329,9 +369,34 @@ installed_version() {
 # always reinstalls instead of freezing the install on a layout we cannot parse.
 is_up_to_date() {
   [ "$FORCE" -eq 0 ] && [ -x "$1" ] || return 1
-  [ "$2" != "unknown" ] || return 1
+  [ -n "$2" ] && [ "$2" != "unknown" ] || return 1
   [ "$(installed_version "$3")" = "$2" ]
 }
+
+# up_to_date_per_cache: true when every selected app is already at the version in
+# the published list. One small download instead of apt and Google's page. Any
+# doubt (list unreachable, product missing, --force/--no-cache/--cli) returns false
+# and the normal path, which asks Google directly, runs.
+up_to_date_per_cache() {
+  [ "$FORCE" -eq 0 ] && [ "$USE_CACHE" -eq 1 ] && [ "$INSTALL_CLI" -eq 0 ] || return 1
+  local list pending=0 v
+  list=$(mktemp "${TMPDIR:-/var/tmp}/$PROJECT_NAME.XXXXXX") || return 1
+  if ! fetch "$VERSIONS_URL" "$list" 15 --retry 0 2>/dev/null; then
+    rm -f "$list"; return 1
+  fi
+  if [ "$INSTALL_DESKTOP" -eq 1 ]; then
+    v=$(cached_version "$list" desktop)
+    is_up_to_date "$OPT_DIR/antigravity/$DESKTOP_TOP/antigravity" "$v" "$OPT_DIR/antigravity/$VERSION_FILE_NAME" || pending=1
+  fi
+  if [ "$INSTALL_IDE" -eq 1 ]; then
+    v=$(cached_version "$list" ide)
+    is_up_to_date "$OPT_DIR/antigravity-ide/Antigravity-IDE/antigravity-ide" "$v" "$OPT_DIR/antigravity-ide/$VERSION_FILE_NAME" || pending=1
+  fi
+  rm -f "$list"
+  return "$pending"
+}
+
+cached_version() { awk -v p="$2" -v a="$AG_PLATFORM" '$1 == p && $2 == a {print $3; exit}' "$1"; }
 
 install_desktop_app() {
   local tmpdir="$1"
@@ -507,7 +572,8 @@ PY
 install_helper() {
   # Make sure this script is the installed helper (also when run from a checkout).
   local self
-  self=$(readlink -f "${BASH_SOURCE[0]}")
+  self=$(readlink -f "${BASH_SOURCE[0]:-}" 2>/dev/null || true)
+  [ -f "$self" ] || err "Cannot install the helper from a piped script. Save the script to a file and run it from there."
   if [ "$self" != "$(readlink -f "$HELPER_PATH" 2>/dev/null || true)" ]; then
     install -m 0755 "$self" "$HELPER_PATH.new"
     mv -f "$HELPER_PATH.new" "$HELPER_PATH"
@@ -523,20 +589,32 @@ write_update_wrapper() {
   chmod 0755 "$BIN_DIR/$name"
 }
 
+# Replace this script with the newest (or pinned) release, but only after its
+# SHA256SUMS entry matches and it parses as shell. Returns when already current.
 self_update() {
-  need curl
-  local tmp args=() a
-  tmp=$(mktemp "${TMPDIR:-/tmp}/$PROJECT_NAME.XXXXXX")
-  local url
-  url=$(helper_url)
-  fetch "$url" "$tmp" 60 || { rm -f "$tmp"; err "Could not download $url"; }
-  bash -n "$tmp" || { rm -f "$tmp"; err "Downloaded helper is not valid; aborting update."; }
-  install -m 0755 "$tmp" "$HELPER_PATH.new"
+  need curl; need sha256sum
+  local tag tmp base args=() a
+  tag=$(target_release_tag)
+  if [ "$tag" = "$VERSION" ]; then
+    log "$PROJECT_NAME $VERSION is already the latest."
+    return 0
+  fi
+  log "Updating $PROJECT_NAME $VERSION -> $tag..."
+  base="$RELEASES_URL/download/$tag"
+  tmp=$(mktemp -d "${TMPDIR:-/var/tmp}/$PROJECT_NAME.XXXXXX")
+  fetch "$base/antigravity-linux" "$tmp/antigravity-linux" 60 || { rm -rf "$tmp"; err "Could not download $base/antigravity-linux"; }
+  fetch "$base/SHA256SUMS" "$tmp/SHA256SUMS" 60 || { rm -rf "$tmp"; err "Could not download $base/SHA256SUMS"; }
+  verify_checksum "$tmp/antigravity-linux" antigravity-linux "$tmp/SHA256SUMS" || { rm -rf "$tmp"; err "Checksum mismatch for release $tag; refusing to update."; }
+  bash -n "$tmp/antigravity-linux" || { rm -rf "$tmp"; err "Downloaded script is not valid shell; aborting update."; }
+  install -m 0755 "$tmp/antigravity-linux" "$HELPER_PATH.new"
   mv -f "$HELPER_PATH.new" "$HELPER_PATH"
-  rm -f "$tmp"
+  rm -rf "$tmp"
   for a in "${ORIGINAL_ARGS[@]}"; do [ "$a" = "update" ] || args+=("$a"); done
-  exec "$HELPER_PATH" install "${args[@]}"
+  run_updated_helper "${args[@]}"
 }
+
+# The new copy takes over from here (a seam so tests can stop before the exec).
+run_updated_helper() { exec "$HELPER_PATH" install "$@"; }
 
 install_cli() {
   local cli_curl="curl -fsSL --retry 3 --connect-timeout 20 --max-time 300"
@@ -661,6 +739,10 @@ main() {
   fi
 
   [ "$DO_UPDATE" -eq 0 ] || self_update
+  if [ "$DO_UPDATE" -eq 1 ] && up_to_date_per_cache; then
+    log "Everything is already up to date."
+    exit 0
+  fi
   install_deps_debian
   local tmp_parent="${TMPDIR:-/var/tmp}"
   mkdir -p "$tmp_parent"
@@ -681,6 +763,6 @@ main() {
 }
 
 # Run only when executed, so tests can source this file and call its functions.
-if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+if [ "${BASH_SOURCE[0]:-$0}" = "$0" ]; then
   main "$@"
 fi
