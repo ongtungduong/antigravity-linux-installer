@@ -20,6 +20,6 @@ done
 
 helper=$(mktemp "${TMPDIR:-/tmp}/antigravity-linux.XXXXXX")
 trap 'rm -f "$helper"' EXIT
-curl -fsSL --retry 3 -o "$helper" "$HELPER_URL" || die "Could not download $HELPER_URL (check network/DNS, or use --proxy)."
+curl -fsSL --retry 3 --connect-timeout 20 --max-time 60 -o "$helper" "$HELPER_URL" || die "Could not download $HELPER_URL (check network/DNS, or use --proxy)."
 
 bash "$helper" install "$@"

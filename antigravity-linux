@@ -4,21 +4,6 @@
 # https://antigravity.google/download. Installed to /usr/local/bin by install.sh.
 set -euo pipefail
 
-ORIGINAL_ARGS=("$@")
-
-# System-wide changes need root. sudo drops the environment (sudo-rs has no -E),
-# so pass the proxy settings explicitly.
-if [ "$(id -u)" -ne 0 ]; then
-  needs_root=1
-  for a in "$@"; do
-    case "$a" in --status|--print-downloads|-h|--help) needs_root=0 ;; esac
-  done
-  if [ "$needs_root" -eq 1 ]; then
-    command -v sudo >/dev/null 2>&1 || { echo "ERROR: This needs root, and sudo was not found. Run it as root." >&2; exit 1; }
-    exec sudo env "http_proxy=${http_proxy:-${HTTP_PROXY:-}}" "https_proxy=${https_proxy:-${HTTPS_PROXY:-}}" \
-      bash "${BASH_SOURCE[0]}" "$@"
-  fi
-fi
 PROJECT_NAME="antigravity-linux"
 DOWNLOAD_PAGE="https://antigravity.google/download"
 CLI_INSTALLER="https://antigravity.google/cli/install.sh"
@@ -32,14 +17,44 @@ DO_STATUS=0
 DO_PRINT_DOWNLOADS=0
 FORCE=0
 DO_UPDATE=0
-HELPER_PATH="/usr/local/bin/antigravity-linux"
-HELPER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/main/antigravity-linux"
 PROXY_URL=""
+
+# Install locations. Variables (not literals) so tests can redirect them.
+OPT_DIR="/opt"
+BIN_DIR="/usr/local/bin"
+SHARE_DIR="/usr/share"
+HELPER_PATH="$BIN_DIR/antigravity-linux"
+VERSION_FILE_NAME=".antigravity-linux-version"
+
+# Which revision of this helper `update` downloads. Pin with ANTIGRAVITY_LINUX_REF
+# (a tag or commit); sudo is told to keep it (see ensure_root).
+REPO_RAW="https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer"
+HELPER_REF="${ANTIGRAVITY_LINUX_REF:-main}"
+
+# Every download gets a connect timeout and a total time limit, so a stalled
+# connection cannot hang an install (or the daily CI run) forever.
+CURL_COMMON=(-fsSL --retry 3 --connect-timeout 20)
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 err() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || err "Required command not found: $1"; }
+
+# fetch URL OUTFILE MAX_SECONDS [extra curl args...]
+fetch() {
+  local url="$1" out="$2" max="$3"
+  shift 3
+  curl "${CURL_COMMON[@]}" --max-time "$max" "$@" -o "$out" "$url"
+}
+
+helper_url() {
+  [[ "$HELPER_REF" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || err "Invalid ANTIGRAVITY_LINUX_REF: '$HELPER_REF' (use a tag or commit name)."
+  printf '%s/%s/antigravity-linux\n' "$REPO_RAW" "$HELPER_REF"
+}
+
+# Files written by root must be readable by everybody: sudo keeps a stricter
+# caller umask (e.g. 077), which would leave /opt and the .desktop files unreadable.
+init_environment() { umask 022; }
 
 usage() {
   cat <<'USAGE'
@@ -71,68 +86,95 @@ Options:
 USAGE
 }
 
-while [ $# -gt 0 ]; do
-  case "$1" in
-    install) ;;
-    update) DO_UPDATE=1 ;;
-    --desktop) INSTALL_DESKTOP=1; INSTALL_IDE=0 ;;
-    --ide) INSTALL_DESKTOP=0; INSTALL_IDE=1 ;;
-    --all) INSTALL_DESKTOP=1; INSTALL_IDE=1 ;;
-    --cli) INSTALL_CLI=1 ;;
-    --no-nautilus) INSTALL_NAUTILUS=0 ;;
-    --no-apt) INSTALL_DEPS=0 ;;
-    --force) FORCE=1 ;;
-    --proxy)
-      shift
-      [ $# -gt 0 ] || err "--proxy needs a URL"
-      PROXY_URL="$1"
-      ;;
-    --status) DO_STATUS=1 ;;
-    --print-downloads) DO_PRINT_DOWNLOADS=1 ;;
-    --uninstall) DO_UNINSTALL=1 ;;
-    -h|--help) usage; exit 0 ;;
-    *) err "Unknown option: $1" ;;
-  esac
-  shift
-done
+# System-wide changes need root. sudo drops the environment (sudo-rs has no -E),
+# so pass the proxy settings explicitly.
+ensure_root() {
+  [ "$(id -u)" -ne 0 ] || return 0
+  local a
+  for a in "$@"; do
+    case "$a" in --status|--print-downloads|-h|--help) return 0 ;; esac
+  done
+  command -v sudo >/dev/null 2>&1 || { echo "ERROR: This needs root, and sudo was not found. Run it as root." >&2; exit 1; }
+  exec sudo env "http_proxy=${http_proxy:-${HTTP_PROXY:-}}" "https_proxy=${https_proxy:-${HTTPS_PROXY:-}}" \
+    "no_proxy=${no_proxy:-${NO_PROXY:-}}" "ANTIGRAVITY_LINUX_REF=${ANTIGRAVITY_LINUX_REF:-}" \
+    bash "${BASH_SOURCE[0]}" "$@"
+}
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      install) ;;
+      update) DO_UPDATE=1 ;;
+      --desktop) INSTALL_DESKTOP=1; INSTALL_IDE=0 ;;
+      --ide) INSTALL_DESKTOP=0; INSTALL_IDE=1 ;;
+      --all) INSTALL_DESKTOP=1; INSTALL_IDE=1 ;;
+      --cli) INSTALL_CLI=1 ;;
+      --no-nautilus) INSTALL_NAUTILUS=0 ;;
+      --no-apt) INSTALL_DEPS=0 ;;
+      --force) FORCE=1 ;;
+      --proxy)
+        shift
+        [ $# -gt 0 ] || err "--proxy needs a URL"
+        PROXY_URL="$1"
+        ;;
+      --status) DO_STATUS=1 ;;
+      --print-downloads) DO_PRINT_DOWNLOADS=1 ;;
+      --uninstall) DO_UNINSTALL=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) err "Unknown option: $1" ;;
+    esac
+    shift
+  done
+}
 
 # Proxy: an explicit --proxy wins; otherwise fill in whichever of the
 # upper/lower-case variables is missing (an empty lowercase value can shadow
 # the uppercase one, and sudo may only pass one of them through).
-if [ -n "$PROXY_URL" ]; then
-  http_proxy="$PROXY_URL"; https_proxy="$PROXY_URL"
-else
-  http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
-  https_proxy="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-}}}"
-fi
-if [ -n "$https_proxy" ] || [ -n "$http_proxy" ]; then
-  HTTP_PROXY="$http_proxy"; HTTPS_PROXY="$https_proxy"
-  export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-  case "$http_proxy$https_proxy" in
-    *@*) warn "Proxy credentials are visible to other local users in the process list while the installer runs." ;;
+setup_proxy() {
+  if [ -n "$PROXY_URL" ]; then
+    http_proxy="$PROXY_URL"; https_proxy="$PROXY_URL"
+  else
+    http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+    https_proxy="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-}}}"
+  fi
+  if [ -n "$https_proxy" ] || [ -n "$http_proxy" ]; then
+    HTTP_PROXY="$http_proxy"; HTTPS_PROXY="$https_proxy"
+    no_proxy="${no_proxy:-${NO_PROXY:-}}"; NO_PROXY="$no_proxy"
+    export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
+    case "$http_proxy$https_proxy" in
+      *@*) warn "Proxy credentials are visible to other local users in the process list while the installer runs." ;;
+    esac
+  fi
+}
+
+detect_platform() {
+  if [ "$(uname -s)" != "Linux" ]; then
+    err "This installer is for Linux only."
+  fi
+  case "$(uname -m)" in
+    x86_64|amd64) AG_PLATFORM="linux-x64"; DESKTOP_TOP="Antigravity-x64" ;;
+    aarch64|arm64) AG_PLATFORM="linux-arm"; DESKTOP_TOP="Antigravity-arm64" ;;
+    *) err "Unsupported CPU architecture: $(uname -m). Google currently provides x64 and ARM64 Linux builds." ;;
   esac
-fi
+}
 
-if [ "$(uname -s)" != "Linux" ]; then
-  err "This installer is for Linux only."
-fi
-
-case "$(uname -m)" in
-  x86_64|amd64) AG_PLATFORM="linux-x64"; DESKTOP_TOP="Antigravity-x64" ;;
-  aarch64|arm64) AG_PLATFORM="linux-arm"; DESKTOP_TOP="Antigravity-arm64" ;;
-  *) err "Unsupported CPU architecture: $(uname -m). Google currently provides x64 and ARM64 Linux builds." ;;
-esac
+pkg_installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q '^install ok installed'; }
 
 install_deps_debian() {
   [ "$INSTALL_DEPS" -eq 1 ] || return 0
   if command -v apt-get >/dev/null 2>&1; then
-    export DEBIAN_FRONTEND=noninteractive
-    apt-get update
-    local packages=(ca-certificates curl tar python3 desktop-file-utils xdg-utils)
+    local packages=(ca-certificates curl tar python3 desktop-file-utils xdg-utils) missing=() p
     if [ "$INSTALL_NAUTILUS" -eq 1 ] && [ "$INSTALL_IDE" -eq 1 ]; then
       packages+=(python3-nautilus)
     fi
-    apt-get install -y "${packages[@]}"
+    for p in "${packages[@]}"; do
+      pkg_installed "$p" || missing+=("$p")
+    done
+    # Nothing missing: skip apt entirely (no network, and an unrelated broken repo cannot block an update).
+    [ "${#missing[@]}" -gt 0 ] || return 0
+    export DEBIAN_FRONTEND=noninteractive
+    apt-get update || warn "apt-get update failed; trying to install anyway."
+    apt-get install -y "${missing[@]}"
   else
     for c in curl tar python3; do need "$c"; done
   fi
@@ -142,7 +184,7 @@ fetch_download_page() {
   local tmpdir="$1"
   local html="$tmpdir/download.html"
   # The download page embeds the tarball URLs directly in its HTML.
-  curl -fsSL --compressed --retry 3 -o "$html" "$DOWNLOAD_PAGE" \
+  fetch "$DOWNLOAD_PAGE" "$html" 60 --compressed \
     || err "Could not download $DOWNLOAD_PAGE. Check your network/DNS (try: getent hosts antigravity.google)."
   printf '%s\n' "$html"
 }
@@ -167,7 +209,7 @@ def version_from_url(url):
     for pattern in (r'/antigravity-hub/([^/]+)/', r'/stable/([^/]+)/', r'/(\d+\.\d+\.\d+(?:-[^/]+)?)/'):
         m = re.search(pattern, decoded)
         if m:
-            return m.group(1).split('-', 1)[0]
+            return m.group(1)
     return 'unknown'
 
 if product == 'desktop':
@@ -230,14 +272,34 @@ with asar.open('rb') as f:
 PY
 }
 
+# Swap NEWDIR into TARGET. Refuses to touch a directory this helper did not create,
+# and restores the old install if the final move fails.
 safe_replace_dir() {
   local newdir="$1"
   local target="$2"
+  if [ -d "$target" ] && [ ! -f "$target/$VERSION_FILE_NAME" ]; then
+    err "$target exists but was not installed by $PROJECT_NAME. Move it away and run again."
+  fi
   rm -rf "${target}.previous"
   if [ -d "$target" ]; then
     mv "$target" "${target}.previous"
   fi
-  mv "$newdir" "$target"
+  if ! mv "$newdir" "$target"; then
+    if [ -d "${target}.previous" ]; then mv "${target}.previous" "$target"; fi
+    err "Could not move the new install into $target; the previous version was restored."
+  fi
+  rm -rf "${target}.previous"
+}
+
+extract_tarball() {
+  # --no-same-owner: as root, tar would otherwise keep the archive's uid/gid.
+  tar --no-same-owner -xzf "$1" -C "$2"
+}
+
+ensure_launcher_free() {
+  if [ -e "$1" ] && [ ! -L "$1" ]; then
+    err "$1 exists and is not a symlink; refusing to overwrite it."
+  fi
 }
 
 fix_chrome_sandbox() {
@@ -250,10 +312,10 @@ fix_chrome_sandbox() {
 
 refresh_desktop_caches() {
   if command -v update-desktop-database >/dev/null 2>&1; then
-    update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
+    update-desktop-database "$SHARE_DIR/applications" >/dev/null 2>&1 || true
   fi
   if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-    gtk-update-icon-cache -q /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    gtk-update-icon-cache -q "$SHARE_DIR/icons/hicolor" >/dev/null 2>&1 || true
   fi
 }
 
@@ -262,25 +324,36 @@ installed_version() {
   cat "$file" 2>/dev/null || true
 }
 
+# is_up_to_date BINARY VERSION VERSION_FILE: skip the install only when the
+# recorded version is known and equal. "unknown" can never be compared, so it
+# always reinstalls instead of freezing the install on a layout we cannot parse.
+is_up_to_date() {
+  [ "$FORCE" -eq 0 ] && [ -x "$1" ] || return 1
+  [ "$2" != "unknown" ] || return 1
+  [ "$(installed_version "$3")" = "$2" ]
+}
+
 install_desktop_app() {
   local tmpdir="$1"
   local page="$2"
   local version url
   read -r version url < <(resolve_desktop_download "$page")
-  local root="/opt/antigravity"
+  local root="$OPT_DIR/antigravity"
   local target="$root/$DESKTOP_TOP/antigravity"
-  local version_file="$root/.antigravity-linux-version"
-  if [ "$FORCE" -eq 0 ] && [ -x "$target" ] && [ "$(installed_version "$version_file")" = "$version" ]; then
+  local version_file="$root/$VERSION_FILE_NAME"
+  if is_up_to_date "$target" "$version" "$version_file"; then
     log "Antigravity 2.0 $version is already installed."
     return
   fi
+  [ "$version" != "unknown" ] || warn "Could not read the Antigravity 2.0 version from the download URL; installing anyway."
+  ensure_launcher_free "$BIN_DIR/antigravity"
 
   log "Downloading Antigravity 2.0 $version for $AG_PLATFORM from Google..."
   local archive="$tmpdir/Antigravity.tar.gz"
-  curl -fsSL --retry 3 -o "$archive" "$url"
+  fetch "$url" "$archive" 1800
   local top_dir="$DESKTOP_TOP" extract="$tmpdir/desktop"
   mkdir -p "$extract"
-  tar -xzf "$archive" -C "$extract"
+  extract_tarball "$archive" "$extract"
   [ -x "$extract/$top_dir/antigravity" ] || err "Unexpected Antigravity archive layout: $top_dir/antigravity not found."
 
   local icon_staged="$tmpdir/antigravity.png"
@@ -291,21 +364,21 @@ install_desktop_app() {
   rm -rf "${root}.new"
   mkdir -p "${root}.new"
   mv "$extract/$top_dir" "${root}.new/"
-  printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
+  printf '%s\n' "$version" > "${root}.new/$VERSION_FILE_NAME"
   printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
   fix_chrome_sandbox "${root}.new/$top_dir/chrome-sandbox"
   safe_replace_dir "${root}.new" "$root"
 
-  ln -sfn "$root/$top_dir/antigravity" /usr/local/bin/antigravity
-  mkdir -p /usr/share/icons/hicolor/512x512/apps /usr/share/applications
+  ln -sfn "$root/$top_dir/antigravity" "$BIN_DIR/antigravity"
+  mkdir -p "$SHARE_DIR/icons/hicolor/512x512/apps" "$SHARE_DIR/applications"
   if [ -f "$icon_staged" ]; then
-    install -m 0644 "$icon_staged" /usr/share/icons/hicolor/512x512/apps/antigravity.png
+    install -m 0644 "$icon_staged" "$SHARE_DIR/icons/hicolor/512x512/apps/antigravity.png"
   fi
-  cat > /usr/share/applications/antigravity.desktop <<DESKTOP
+  cat > "$SHARE_DIR/applications/antigravity.desktop" <<DESKTOP
 [Desktop Entry]
 Name=Antigravity
 Comment=Google Antigravity 2.0 agent platform
-Exec=/usr/local/bin/antigravity %U
+Exec=$BIN_DIR/antigravity %U
 Icon=antigravity
 Terminal=false
 Type=Application
@@ -322,41 +395,43 @@ install_ide_app() {
   local page="$2"
   local version url
   read -r version url < <(resolve_ide_download "$page")
-  local root="/opt/antigravity-ide"
+  local root="$OPT_DIR/antigravity-ide"
   local install_dir="Antigravity-IDE"
-  local version_file="$root/.antigravity-linux-version"
-  if [ "$FORCE" -eq 0 ] && [ -x "$root/$install_dir/antigravity-ide" ] && [ "$(installed_version "$version_file")" = "$version" ]; then
+  local version_file="$root/$VERSION_FILE_NAME"
+  if is_up_to_date "$root/$install_dir/antigravity-ide" "$version" "$version_file"; then
     log "Antigravity IDE $version is already installed."
     return
   fi
+  [ "$version" != "unknown" ] || warn "Could not read the Antigravity IDE version from the download URL; installing anyway."
+  ensure_launcher_free "$BIN_DIR/antigravity-ide"
 
   log "Downloading Antigravity IDE $version for $AG_PLATFORM from Google..."
   local archive="$tmpdir/Antigravity-IDE.tar.gz"
-  curl -fsSL --retry 3 -o "$archive" "$url"
+  fetch "$url" "$archive" 1800
   local top_dir="Antigravity IDE" extract="$tmpdir/ide"
   mkdir -p "$extract"
-  tar -xzf "$archive" -C "$extract"
+  extract_tarball "$archive" "$extract"
   [ -x "$extract/$top_dir/antigravity-ide" ] || err "Unexpected Antigravity IDE archive layout: $top_dir/antigravity-ide not found."
 
   rm -rf "${root}.new"
-  mkdir -p "${root}.new/$install_dir"
-  cp -a "$extract/$top_dir/." "${root}.new/$install_dir/"
-  printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
+  mkdir -p "${root}.new"
+  mv "$extract/$top_dir" "${root}.new/$install_dir"
+  printf '%s\n' "$version" > "${root}.new/$VERSION_FILE_NAME"
   printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
   fix_chrome_sandbox "${root}.new/$install_dir/chrome-sandbox"
   safe_replace_dir "${root}.new" "$root"
 
-  ln -sfn "$root/$install_dir/antigravity-ide" /usr/local/bin/antigravity-ide
-  mkdir -p /usr/share/icons/hicolor/512x512/apps /usr/share/applications
+  ln -sfn "$root/$install_dir/antigravity-ide" "$BIN_DIR/antigravity-ide"
+  mkdir -p "$SHARE_DIR/icons/hicolor/512x512/apps" "$SHARE_DIR/applications"
   local icon_source="$root/$install_dir/resources/app/resources/linux/code.png"
   if [ -f "$icon_source" ]; then
-    install -m 0644 "$icon_source" /usr/share/icons/hicolor/512x512/apps/antigravity-ide.png
+    install -m 0644 "$icon_source" "$SHARE_DIR/icons/hicolor/512x512/apps/antigravity-ide.png"
   fi
-  cat > /usr/share/applications/antigravity-ide.desktop <<DESKTOP
+  cat > "$SHARE_DIR/applications/antigravity-ide.desktop" <<DESKTOP
 [Desktop Entry]
 Name=Antigravity IDE
 Comment=Google Antigravity IDE
-Exec=/usr/local/bin/antigravity-ide %F
+Exec=$BIN_DIR/antigravity-ide %F
 Icon=antigravity-ide
 Terminal=false
 Type=Application
@@ -386,8 +461,8 @@ PY
     warn "Skipping Nautilus extension because Python Nautilus bindings are unavailable."
     return 0
   fi
-  mkdir -p /usr/share/nautilus-python/extensions
-  cat > /usr/share/nautilus-python/extensions/open-in-antigravity-ide.py <<'PY'
+  mkdir -p "$SHARE_DIR/nautilus-python/extensions"
+  cat > "$SHARE_DIR/nautilus-python/extensions/open-in-antigravity-ide.py" <<'PY'
 import subprocess
 from urllib.parse import unquote, urlparse
 from gi.repository import Nautilus, GObject
@@ -437,16 +512,24 @@ install_helper() {
     install -m 0755 "$self" "$HELPER_PATH.new"
     mv -f "$HELPER_PATH.new" "$HELPER_PATH"
   fi
-  printf '#!/usr/bin/env bash\nexec antigravity-linux update --desktop "$@"\n' > /usr/local/bin/update-antigravity
-  printf '#!/usr/bin/env bash\nexec antigravity-linux update --ide "$@"\n' > /usr/local/bin/update-antigravity-ide
-  chmod +x /usr/local/bin/update-antigravity /usr/local/bin/update-antigravity-ide
+  # Shortcuts only for what is being installed, so `update-antigravity` never installs an app nobody asked for.
+  if [ "$INSTALL_DESKTOP" -eq 1 ]; then write_update_wrapper update-antigravity --desktop; fi
+  if [ "$INSTALL_IDE" -eq 1 ]; then write_update_wrapper update-antigravity-ide --ide; fi
+}
+
+write_update_wrapper() {
+  local name="$1" flag="$2"
+  printf '#!/usr/bin/env bash\nexec "%s" update %s "$@"\n' "$HELPER_PATH" "$flag" > "$BIN_DIR/$name"
+  chmod 0755 "$BIN_DIR/$name"
 }
 
 self_update() {
   need curl
   local tmp args=() a
   tmp=$(mktemp "${TMPDIR:-/tmp}/$PROJECT_NAME.XXXXXX")
-  curl -fsSL --retry 3 -o "$tmp" "$HELPER_URL" || { rm -f "$tmp"; err "Could not download $HELPER_URL"; }
+  local url
+  url=$(helper_url)
+  fetch "$url" "$tmp" 60 || { rm -f "$tmp"; err "Could not download $url"; }
   bash -n "$tmp" || { rm -f "$tmp"; err "Downloaded helper is not valid; aborting update."; }
   install -m 0755 "$tmp" "$HELPER_PATH.new"
   mv -f "$HELPER_PATH.new" "$HELPER_PATH"
@@ -456,33 +539,36 @@ self_update() {
 }
 
 install_cli() {
-  log "Running Google's official Antigravity CLI installer for the non-root user..."
+  local cli_curl="curl -fsSL --retry 3 --connect-timeout 20 --max-time 300"
   if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+    log "Running Google's official Antigravity CLI installer as $SUDO_USER..."
     # sudo resets the environment, so hand the proxy to the user's shell explicitly.
     local env_args=()
     [ -z "${http_proxy:-}" ] || env_args+=("http_proxy=$http_proxy")
     [ -z "${https_proxy:-}" ] || env_args+=("https_proxy=$https_proxy")
-    sudo -u "$SUDO_USER" -H env "${env_args[@]}" bash -lc "curl -fsSL '$CLI_INSTALLER' | bash"
+    sudo -u "$SUDO_USER" -H env "${env_args[@]}" bash -lc "$cli_curl '$CLI_INSTALLER' | bash"
   else
-    curl -fsSL "$CLI_INSTALLER" | bash
+    log "Running Google's official Antigravity CLI installer as root (no sudo user to drop to)..."
+    # shellcheck disable=SC2086  # cli_curl is a fixed, space-separated option string
+    $cli_curl "$CLI_INSTALLER" | bash
   fi
 }
 
 print_status() {
   log "Antigravity Linux status"
-  if [ -x /usr/local/bin/antigravity ]; then
-    log "- Antigravity 2.0: installed ($(installed_version /opt/antigravity/.antigravity-linux-version))"
-    log "  Command: /usr/local/bin/antigravity"
+  if [ -x "$BIN_DIR/antigravity" ]; then
+    log "- Antigravity 2.0: installed ($(installed_version "$OPT_DIR/antigravity/$VERSION_FILE_NAME"))"
+    log "  Command: $BIN_DIR/antigravity"
   else
     log "- Antigravity 2.0: not installed by this helper"
   fi
-  if [ -x /usr/local/bin/antigravity-ide ]; then
-    log "- Antigravity IDE: installed ($(installed_version /opt/antigravity-ide/.antigravity-linux-version))"
-    log "  Command: /usr/local/bin/antigravity-ide"
+  if [ -x "$BIN_DIR/antigravity-ide" ]; then
+    log "- Antigravity IDE: installed ($(installed_version "$OPT_DIR/antigravity-ide/$VERSION_FILE_NAME"))"
+    log "  Command: $BIN_DIR/antigravity-ide"
   else
     log "- Antigravity IDE: not installed by this helper"
   fi
-  if [ -x /usr/local/bin/antigravity-linux ]; then
+  if [ -x "$HELPER_PATH" ]; then
     log "- Update helper: installed"
   else
     log "- Update helper: not installed"
@@ -495,6 +581,7 @@ print_downloads() {
   local tmp_parent="${TMPDIR:-/tmp}"
   local tmpdir
   tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
+  # shellcheck disable=SC2064  # expand now on purpose: $tmpdir is local and gone when the trap fires
   trap "rm -rf '$tmpdir'" EXIT
   local page
   page=$(fetch_download_page "$tmpdir")
@@ -516,10 +603,10 @@ print_success_summary() {
   log ""
   log "Installed:"
   if [ "$INSTALL_DESKTOP" -eq 1 ]; then
-    log "- Antigravity 2.0: /usr/local/bin/antigravity"
+    log "- Antigravity 2.0: $BIN_DIR/antigravity"
   fi
   if [ "$INSTALL_IDE" -eq 1 ]; then
-    log "- Antigravity IDE: /usr/local/bin/antigravity-ide"
+    log "- Antigravity IDE: $BIN_DIR/antigravity-ide"
   fi
   log ""
   log "Manage:"
@@ -533,16 +620,33 @@ print_success_summary() {
 }
 
 uninstall_all() {
-  rm -rf /opt/antigravity /opt/antigravity.new /opt/antigravity.previous /opt/antigravity-ide /opt/antigravity-ide.new /opt/antigravity-ide.previous
-  rm -f /usr/local/bin/antigravity /usr/local/bin/antigravity-ide /usr/local/bin/update-antigravity /usr/local/bin/update-antigravity-ide /usr/local/bin/antigravity-linux
-  rm -f /usr/share/applications/antigravity.desktop /usr/share/applications/antigravity-ide.desktop
-  rm -f /usr/share/icons/hicolor/512x512/apps/antigravity.png /usr/share/icons/hicolor/512x512/apps/antigravity-ide.png
-  rm -f /usr/share/nautilus-python/extensions/open-in-antigravity-ide.py
+  local d f
+  # Only remove /opt directories this helper created (they carry its version file).
+  for d in antigravity antigravity-ide; do
+    if [ ! -e "$OPT_DIR/$d" ] || [ -f "$OPT_DIR/$d/$VERSION_FILE_NAME" ]; then
+      rm -rf "${OPT_DIR:?}/$d" "${OPT_DIR:?}/$d.new" "${OPT_DIR:?}/$d.previous"
+    else
+      warn "$OPT_DIR/$d was not installed by $PROJECT_NAME; leaving it in place."
+    fi
+  done
+  for f in antigravity antigravity-ide; do
+    if [ -L "$BIN_DIR/$f" ]; then rm -f "$BIN_DIR/$f"; fi
+  done
+  rm -f "$BIN_DIR/update-antigravity" "$BIN_DIR/update-antigravity-ide" "$BIN_DIR/antigravity-linux"
+  rm -f "$SHARE_DIR/applications/antigravity.desktop" "$SHARE_DIR/applications/antigravity-ide.desktop"
+  rm -f "$SHARE_DIR/icons/hicolor/512x512/apps/antigravity.png" "$SHARE_DIR/icons/hicolor/512x512/apps/antigravity-ide.png"
+  rm -f "$SHARE_DIR/nautilus-python/extensions/open-in-antigravity-ide.py"
   refresh_desktop_caches
   log "Removed helper-managed Antigravity files. User settings under home directories were left untouched."
 }
 
 main() {
+  ORIGINAL_ARGS=("$@")
+  ensure_root "$@"
+  init_environment
+  parse_args "$@"
+  setup_proxy
+  detect_platform
   if [ "$DO_STATUS" -eq 1 ]; then
     print_status
     exit 0
@@ -562,6 +666,7 @@ main() {
   mkdir -p "$tmp_parent"
   local tmpdir
   tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
+  # shellcheck disable=SC2064  # expand now on purpose: $tmpdir is local and gone when the trap fires
   trap "rm -rf '$tmpdir'" EXIT
   local page
   page=$(fetch_download_page "$tmpdir")
@@ -575,4 +680,7 @@ main() {
   print_success_summary
 }
 
-main "$@"
+# Run only when executed, so tests can source this file and call its functions.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

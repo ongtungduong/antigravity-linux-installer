@@ -34,7 +34,7 @@ curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-inst
 
 Flags go after `bash -s --`; see [Options](#options) for the rest (`--cli`, `--force`, `--no-nautilus`, ...).
 
-How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`.
+How it works: `install.sh` is a short bootstrap. It downloads the `antigravity-linux` helper and runs `antigravity-linux install`, which re-runs itself under `sudo`, installs the apps, and keeps itself in `/usr/local/bin` for later updates. To review first, read [`install.sh`](install.sh) and [`antigravity-linux`](antigravity-linux), or download the helper and run `bash antigravity-linux install --all`. To install a reviewed version, pin it: `curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-linux-installer/<tag>/install.sh | ANTIGRAVITY_LINUX_REF=<tag> bash`. `update` follows `main` unless `ANTIGRAVITY_LINUX_REF` is set again, e.g. `ANTIGRAVITY_LINUX_REF=<tag> antigravity-linux update --all`.
 
 `--proxy http://user:pass@host` credentials are visible in the process list while it runs.
 
@@ -48,7 +48,7 @@ All commands below ask for `sudo` themselves where needed.
 antigravity-linux update --all
 ```
 
-`update` first downloads the latest helper (rejecting it if it is not valid shell), then installs.
+`update` first downloads the latest helper (rejecting it if it is not valid shell), then installs. If the recorded version already matches, nothing is downloaded and `apt` is only touched when a dependency is actually missing.
 
 **Update the desktop app only**
 
@@ -112,10 +112,25 @@ Any [option](#options) can be added to `antigravity-linux update`, e.g. `--force
 
 The Electron/Chromium sandbox is preserved (`chrome-sandbox` set to `root:root`, mode `4755`); no `--no-sandbox` launchers.
 
+Safety rails:
+
+- The swap into `/opt` is rolled back if it fails, and the helper refuses to replace a directory it did not create (it carries a `.antigravity-linux-version` file). `--uninstall` skips such directories too.
+- It will not overwrite a regular file in `/usr/local/bin` that is not a symlink.
+- Archives are extracted without their original owner, and files are created with `umask 022` whatever your own umask is.
+- Every download has a connect timeout and an overall time limit.
+
 ## Requirements
 
 - x86_64 or ARM64 Linux, `glibc >= 2.28` (e.g. Ubuntu 20.04, Debian 10, Fedora 36, RHEL 8)
 - Debian/Ubuntu (`apt-get`) installs dependencies automatically. Elsewhere, have `bash`, `curl`, `tar`, `python3`, `desktop-file-utils` and `xdg-utils` installed and use `--no-apt`. Nautilus integration also needs `python3-nautilus`.
+
+## Development
+
+```bash
+bash tests/run.sh
+```
+
+The suite is offline and needs no root: `curl`, `sudo`, `apt-get` and friends are stubbed, and every install path is redirected into a temporary directory. CI also runs `shellcheck` and, daily, resolves the real download URLs from Google.
 
 ## License
 
