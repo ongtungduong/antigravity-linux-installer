@@ -25,12 +25,14 @@ curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/
 
 Prefer to read it first? Download `install.sh`, review it, then run `bash install.sh --all`.
 
+When piped, the script re-runs itself under `sudo` from the same stream, so what runs as root is exactly what you piped (pin a tag or commit in the URL to install a reviewed version). `--proxy http://user:pass@host` credentials are visible in the process list while it runs.
+
 ## Manage
 
 ```bash
 antigravity-linux update --all   # update (or: update-antigravity, update-antigravity-ide)
-antigravity-linux --status       # show installed apps and versions
-antigravity-linux --uninstall    # remove helper-managed files (user settings are kept)
+antigravity-linux --status       # show installed apps and versions (works offline)
+antigravity-linux --uninstall    # remove helper-managed files (works offline; user settings are kept)
 ```
 
 ## Options
@@ -48,7 +50,6 @@ antigravity-linux --uninstall    # remove helper-managed files (user settings ar
 --status           Show installed helper-managed apps and versions
 --print-downloads  Print resolved official Google tarball URLs
 --uninstall        Remove helper-managed installation
--y, --yes          Non-interactive; assume yes where possible
 ```
 
 ## What it installs

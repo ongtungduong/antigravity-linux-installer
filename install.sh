@@ -5,6 +5,29 @@
 set -euo pipefail
 
 ORIGINAL_ARGS=("$@")
+
+# Elevate before the rest of the script is read. When piped (curl | bash), the
+# root child then reads this very script from the same stdin, so what runs as
+# root is exactly what was piped. sudo drops the environment (sudo-rs has no
+# -E), so pass what the child needs explicitly.
+if [ "$(id -u)" -ne 0 ]; then
+  needs_root=1
+  for a in "$@"; do
+    case "$a" in --status|--print-downloads|-h|--help) needs_root=0 ;; esac
+  done
+  if [ "$needs_root" -eq 1 ]; then
+    command -v sudo >/dev/null 2>&1 || { echo "ERROR: System-wide install needs root, and sudo was not found. Run this script as root." >&2; exit 1; }
+    elevate_env=("ANTIGRAVITY_LINUX_INSTALLER_URL=${ANTIGRAVITY_LINUX_INSTALLER_URL:-}"
+      "http_proxy=${http_proxy:-${HTTP_PROXY:-}}" "https_proxy=${https_proxy:-${HTTPS_PROXY:-}}")
+    if [ -f "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]:-}" ]; then
+      exec sudo env "${elevate_env[@]}" bash "${BASH_SOURCE[0]}" "$@"
+    elif [ ! -t 0 ]; then
+      exec sudo env "${elevate_env[@]}" bash -euo pipefail -s -- "$@"
+    fi
+    echo "ERROR: Run this as 'curl -fsSL <url> | bash' or save install.sh to a file first." >&2
+    exit 1
+  fi
+fi
 PROJECT_NAME="antigravity-linux"
 DOWNLOAD_PAGE="https://antigravity.google/download"
 CLI_INSTALLER="https://antigravity.google/cli/install.sh"
@@ -17,7 +40,6 @@ DO_UNINSTALL=0
 DO_STATUS=0
 DO_PRINT_DOWNLOADS=0
 FORCE=0
-YES=0
 DEFAULT_INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh"
 INSTALLER_URL="${ANTIGRAVITY_LINUX_INSTALLER_URL:-$DEFAULT_INSTALLER_URL}"
 PROXY_URL=""
@@ -53,7 +75,6 @@ Options:
   --status               Show installed helper-managed apps and versions
   --print-downloads      Print the resolved official Google tarball URLs
   --uninstall            Remove helper-managed Antigravity desktop/IDE files
-  -y, --yes              Non-interactive; assume yes where possible
   -h, --help             Show this help
 
 One-liner (asks for sudo itself):
@@ -87,7 +108,6 @@ while [ $# -gt 0 ]; do
     --status) DO_STATUS=1 ;;
     --print-downloads) DO_PRINT_DOWNLOADS=1 ;;
     --uninstall) DO_UNINSTALL=1 ;;
-    -y|--yes) YES=1 ;;
     -h|--help) usage; exit 0 ;;
     *) err "Unknown option: $1" ;;
   esac
@@ -106,6 +126,9 @@ fi
 if [ -n "$https_proxy" ] || [ -n "$http_proxy" ]; then
   HTTP_PROXY="$http_proxy"; HTTPS_PROXY="$https_proxy"
   export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+  case "$http_proxy$https_proxy" in
+    *@*) warn "Proxy credentials are visible to other local users in the process list while the installer runs." ;;
+  esac
 fi
 
 if [ "$(uname -s)" != "Linux" ]; then
@@ -117,27 +140,6 @@ case "$(uname -m)" in
   aarch64|arm64) AG_PLATFORM="linux-arm"; DESKTOP_TOP="Antigravity-arm64" ;;
   *) err "Unsupported CPU architecture: $(uname -m). Google currently provides x64 and ARM64 Linux builds." ;;
 esac
-
-require_root_or_reexec() {
-  if [ "$(id -u)" -eq 0 ]; then
-    return 0
-  fi
-  command -v sudo >/dev/null 2>&1 || err "System-wide install needs root, and sudo was not found. Run this script as root."
-  local script="${BASH_SOURCE[0]:-}" tmp="" rc=0
-  # When piped (curl | bash) there is no script file to re-run, so fetch a copy.
-  if [ ! -f "$script" ] || [ ! -r "$script" ]; then
-    need curl
-    tmp=$(mktemp "${TMPDIR:-/tmp}/$PROJECT_NAME-install.XXXXXX")
-    curl -fsSL --retry 3 -o "$tmp" "$INSTALLER_URL" \
-      || { rm -f "$tmp"; err "Could not download $INSTALLER_URL"; }
-    script="$tmp"
-  fi
-  # sudo drops the environment (sudo-rs has no -E), so pass what we need explicitly.
-  sudo env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" \
-    bash "$script" "${ORIGINAL_ARGS[@]}" || rc=$?
-  [ -z "$tmp" ] || rm -f "$tmp"
-  exit "$rc"
-}
 
 install_deps_debian() {
   [ "$INSTALL_DEPS" -eq 1 ] || return 0
@@ -154,7 +156,7 @@ install_deps_debian() {
   fi
 }
 
-resolve_main_bundle() {
+fetch_download_page() {
   local tmpdir="$1"
   local html="$tmpdir/download.html"
   # The download page embeds the tarball URLs directly in its HTML.
@@ -163,19 +165,16 @@ resolve_main_bundle() {
   printf '%s\n' "$html"
 }
 
-resolve_download_from_bundle() {
-  local js="$1"
+resolve_download() {
+  local page="$1"
   local product="$2"
-  python3 - "$js" "$AG_PLATFORM" "$product" <<'PY'
+  python3 - "$page" "$AG_PLATFORM" "$product" <<'PY'
 import html, re, sys
 from pathlib import Path
 from urllib.parse import unquote
-bundle = html.unescape(Path(sys.argv[1]).read_text(errors='replace'))
+text = html.unescape(Path(sys.argv[1]).read_text(errors='replace'))
 platform = sys.argv[2]
 product = sys.argv[3]
-
-# Normalize escaped slashes sometimes found in JS string literals.
-text = bundle.replace('\\/', '/')
 
 def fail(msg):
     raise SystemExit(msg)
@@ -211,19 +210,20 @@ sections.append(text)
 
 for section in sections:
     for filename_re in filename_patterns:
-        pattern = r'https?://[^"\'\s<>)]*/' + re.escape(platform) + r'/' + filename_re
+        # HTTPS only, and only Google-owned download hosts.
+        pattern = r'https://(?:[\w-]+\.)*(?:googleapis\.com|gvt1\.com|google\.com|googleusercontent\.com)/[^"\'\s<>)]*/' + re.escape(platform) + r'/' + filename_re
         matches = re.findall(pattern, section)
         if matches:
             url = matches[-1]
             print(version_from_url(url), url)
             sys.exit(0)
 
-fail(f'Could not find official {label} tarball for {platform} in Google download bundle')
+fail(f'Could not find official {label} tarball for {platform} on the Google download page')
 PY
 }
 
-resolve_desktop_download() { resolve_download_from_bundle "$1" desktop; }
-resolve_ide_download() { resolve_download_from_bundle "$1" ide; }
+resolve_desktop_download() { resolve_download "$1" desktop; }
+resolve_ide_download() { resolve_download "$1" ide; }
 
 asar_extract_icon_png() {
   local asar="$1"
@@ -282,9 +282,9 @@ installed_version() {
 
 install_desktop_app() {
   local tmpdir="$1"
-  local js="$2"
+  local page="$2"
   local version url
-  read -r version url < <(resolve_desktop_download "$js")
+  read -r version url < <(resolve_desktop_download "$page")
   local root="/opt/antigravity"
   local target="$root/$DESKTOP_TOP/antigravity"
   local version_file="$root/.antigravity-linux-version"
@@ -296,21 +296,19 @@ install_desktop_app() {
   log "Downloading Antigravity 2.0 $version for $AG_PLATFORM from Google..."
   local archive="$tmpdir/Antigravity.tar.gz"
   curl -fsSL --retry 3 -o "$archive" "$url"
-  tar -tzf "$archive" > "$tmpdir/desktop-list.txt"
-  local top_dir
-  top_dir=$(sed -n '1{s#/.*##;p;q}' "$tmpdir/desktop-list.txt")
-  [ "$top_dir" = "$DESKTOP_TOP" ] || err "Unexpected Antigravity archive layout: $top_dir"
-  tar -xzf "$archive" -C "$tmpdir"
-  [ -x "$tmpdir/$top_dir/antigravity" ] || err "Antigravity launcher not found inside tarball."
+  local top_dir="$DESKTOP_TOP" extract="$tmpdir/desktop"
+  mkdir -p "$extract"
+  tar -xzf "$archive" -C "$extract"
+  [ -x "$extract/$top_dir/antigravity" ] || err "Unexpected Antigravity archive layout: $top_dir/antigravity not found."
 
   local icon_staged="$tmpdir/antigravity.png"
-  if [ -f "$tmpdir/$top_dir/resources/app.asar" ]; then
-    asar_extract_icon_png "$tmpdir/$top_dir/resources/app.asar" "$icon_staged" || warn "Could not extract desktop icon; continuing."
+  if [ -f "$extract/$top_dir/resources/app.asar" ]; then
+    asar_extract_icon_png "$extract/$top_dir/resources/app.asar" "$icon_staged" || warn "Could not extract desktop icon; continuing."
   fi
 
   rm -rf "${root}.new"
   mkdir -p "${root}.new"
-  cp -a "$tmpdir/$top_dir" "${root}.new/"
+  mv "$extract/$top_dir" "${root}.new/"
   printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
   printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
   fix_chrome_sandbox "${root}.new/$top_dir/chrome-sandbox"
@@ -339,9 +337,9 @@ DESKTOP
 
 install_ide_app() {
   local tmpdir="$1"
-  local js="$2"
+  local page="$2"
   local version url
-  read -r version url < <(resolve_ide_download "$js")
+  read -r version url < <(resolve_ide_download "$page")
   local root="/opt/antigravity-ide"
   local install_dir="Antigravity-IDE"
   local version_file="$root/.antigravity-linux-version"
@@ -353,16 +351,14 @@ install_ide_app() {
   log "Downloading Antigravity IDE $version for $AG_PLATFORM from Google..."
   local archive="$tmpdir/Antigravity-IDE.tar.gz"
   curl -fsSL --retry 3 -o "$archive" "$url"
-  tar -tzf "$archive" > "$tmpdir/ide-list.txt"
-  local top_dir
-  top_dir=$(sed -n '1{s#/.*##;p;q}' "$tmpdir/ide-list.txt")
-  [ "$top_dir" = "Antigravity IDE" ] || err "Unexpected Antigravity IDE archive layout: $top_dir"
-  tar -xzf "$archive" -C "$tmpdir"
-  [ -x "$tmpdir/$top_dir/antigravity-ide" ] || err "Antigravity IDE launcher not found inside tarball."
+  local top_dir="Antigravity IDE" extract="$tmpdir/ide"
+  mkdir -p "$extract"
+  tar -xzf "$archive" -C "$extract"
+  [ -x "$extract/$top_dir/antigravity-ide" ] || err "Unexpected Antigravity IDE archive layout: $top_dir/antigravity-ide not found."
 
   rm -rf "${root}.new"
   mkdir -p "${root}.new/$install_dir"
-  cp -a "$tmpdir/$top_dir/." "${root}.new/$install_dir/"
+  cp -a "$extract/$top_dir/." "${root}.new/$install_dir/"
   printf '%s\n' "$version" > "${root}.new/.antigravity-linux-version"
   printf '%s\n' "$url" > "${root}.new/.antigravity-linux-source-url"
   fix_chrome_sandbox "${root}.new/$install_dir/chrome-sandbox"
@@ -452,14 +448,22 @@ PY
 }
 
 install_manager_command() {
-  local installer_url="$INSTALLER_URL"
-  cat > /usr/local/bin/antigravity-linux <<SH
-#!/usr/bin/env bash
-set -euo pipefail
-SCRIPT_URL="$installer_url"
-# install.sh elevates with sudo by itself.
-curl -fsSL "\$SCRIPT_URL" | env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" bash -s -- "\$@"
+  # Standalone helper: --status and --uninstall work offline; anything else
+  # fetches and runs the installer (which elevates itself).
+  {
+    printf '#!/usr/bin/env bash\nset -euo pipefail\nSCRIPT_URL=%q\n' "$INSTALLER_URL"
+    declare -f log installed_version refresh_desktop_caches print_status uninstall_all
+    cat <<'SH'
+case "${1:-}" in
+  --status) print_status ;;
+  --uninstall)
+    [ "$(id -u)" -eq 0 ] || exec sudo "$0" "$@"
+    uninstall_all
+    ;;
+  *) curl -fsSL "$SCRIPT_URL" | env ANTIGRAVITY_LINUX_INSTALLER_URL="$SCRIPT_URL" bash -s -- "$@" ;;
+esac
 SH
+  } > /usr/local/bin/antigravity-linux
   chmod +x /usr/local/bin/antigravity-linux
   cat > /usr/local/bin/update-antigravity <<'SH'
 #!/usr/bin/env bash
@@ -471,6 +475,19 @@ SH
 exec antigravity-linux update --ide "$@"
 SH
   chmod +x /usr/local/bin/update-antigravity-ide
+}
+
+install_cli() {
+  log "Running Google's official Antigravity CLI installer for the non-root user..."
+  if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
+    # sudo resets the environment, so hand the proxy to the user's shell explicitly.
+    local env_args=()
+    [ -z "${http_proxy:-}" ] || env_args+=("http_proxy=$http_proxy")
+    [ -z "${https_proxy:-}" ] || env_args+=("https_proxy=$https_proxy")
+    sudo -u "$SUDO_USER" -H env "${env_args[@]}" bash -lc "curl -fsSL '$CLI_INSTALLER' | bash"
+  else
+    curl -fsSL "$CLI_INSTALLER" | bash
+  fi
 }
 
 print_status() {
@@ -500,19 +517,19 @@ print_downloads() {
   local tmp_parent="${TMPDIR:-/tmp}"
   local tmpdir
   tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
-  local js
-  js=$(resolve_main_bundle "$tmpdir")
+  trap "rm -rf '$tmpdir'" EXIT
+  local page
+  page=$(fetch_download_page "$tmpdir")
   if [ "$INSTALL_DESKTOP" -eq 1 ]; then
     local version url
-    read -r version url < <(resolve_desktop_download "$js")
+    read -r version url < <(resolve_desktop_download "$page")
     log "Antigravity 2.0 $version: $url"
   fi
   if [ "$INSTALL_IDE" -eq 1 ]; then
     local version url
-    read -r version url < <(resolve_ide_download "$js")
+    read -r version url < <(resolve_ide_download "$page")
     log "Antigravity IDE $version: $url"
   fi
-  rm -rf "$tmpdir"
 }
 
 print_success_summary() {
@@ -538,7 +555,6 @@ print_success_summary() {
 }
 
 uninstall_all() {
-  require_root_or_reexec
   rm -rf /opt/antigravity /opt/antigravity.new /opt/antigravity.previous /opt/antigravity-ide /opt/antigravity-ide.new /opt/antigravity-ide.previous
   rm -f /usr/local/bin/antigravity /usr/local/bin/antigravity-ide /usr/local/bin/update-antigravity /usr/local/bin/update-antigravity-ide /usr/local/bin/antigravity-linux
   rm -f /usr/share/applications/antigravity.desktop /usr/share/applications/antigravity-ide.desktop
@@ -562,27 +578,21 @@ main() {
     exit 0
   fi
 
-  require_root_or_reexec
   install_deps_debian
   local tmp_parent="${TMPDIR:-/var/tmp}"
   mkdir -p "$tmp_parent"
   local tmpdir
   tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
   trap "rm -rf '$tmpdir'" EXIT
-  local js
-  js=$(resolve_main_bundle "$tmpdir")
-  [ "$INSTALL_DESKTOP" -eq 1 ] && install_desktop_app "$tmpdir" "$js"
-  [ "$INSTALL_IDE" -eq 1 ] && install_ide_app "$tmpdir" "$js"
+  local page
+  page=$(fetch_download_page "$tmpdir")
+  [ "$INSTALL_DESKTOP" -eq 1 ] && install_desktop_app "$tmpdir" "$page"
+  [ "$INSTALL_IDE" -eq 1 ] && install_ide_app "$tmpdir" "$page"
   install_nautilus_extension
-  if [ "$INSTALL_CLI" -eq 1 ]; then
-    log "Running Google's official Antigravity CLI installer for the non-root user..."
-    if [ -n "${SUDO_USER:-}" ] && [ "${SUDO_USER:-}" != "root" ]; then
-      sudo -u "$SUDO_USER" -H bash -lc "curl -fsSL '$CLI_INSTALLER' | bash"
-    else
-      curl -fsSL "$CLI_INSTALLER" | bash
-    fi
-  fi
   install_manager_command
+  if [ "$INSTALL_CLI" -eq 1 ]; then
+    install_cli || warn "Antigravity CLI installer failed; the desktop/IDE install is complete."
+  fi
   print_success_summary
 }
 
