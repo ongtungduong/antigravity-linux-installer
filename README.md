@@ -34,7 +34,7 @@ This project does **not** mirror, modify, or redistribute Google Antigravity. Th
   - `antigravity`
   - `antigravity-ide`
 - Adds update helper:
-  - `sudo antigravity-linux update --all`
+  - `antigravity-linux update --all`
 - Adds folder opening integration for IDE:
   - file manager `Open With` support through `.desktop` MIME entries
   - optional GNOME Files/Nautilus right-click menu helper
@@ -43,68 +43,53 @@ This project does **not** mirror, modify, or redistribute Google Antigravity. Th
 ## Minimum Requirements
 > `glibc >= 2.28, glibcxx >= 3.4.25 (e.g. Ubuntu 20. Debian 10, Fedora 36, RHEL 8)`
 
-## Quick install from GitHub Pages
-
-Install Antigravity 2.0 and the IDE:
+## Quick install
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash
 ```
 
-Install only Antigravity 2.0 desktop app:
+The script asks for `sudo` itself. By default it installs the Antigravity 2.0 desktop app. Pass flags after `bash -s --`:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s --
+# Desktop app + IDE
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
+
+# IDE only
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --ide
 ```
 
-Install only Antigravity IDE:
+### Behind a proxy
+
+If `antigravity.google` cannot be resolved directly, add `--proxy`:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --ide
-```
-
-## Quick install from raw GitHub
-
-```bash
-INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
-```
-
-## Behind a proxy
-
-If `antigravity.google` cannot be resolved directly, pass your proxy (`sudo` drops proxy variables):
-
-```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all --proxy http://HOST:PORT
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
 ```
 
 ## Update
 
-Once installed from a published URL:
+Once installed:
 
 ```bash
-sudo antigravity-linux update --all
+antigravity-linux update --all
 ```
 
 Desktop app only:
 
 ```bash
-sudo update-antigravity
+update-antigravity
 ```
 
 IDE only:
 
 ```bash
-sudo update-antigravity-ide
+update-antigravity-ide
 ```
 
 ## Status
 
-When installed from a published URL:
+Once installed:
 
 ```bash
 antigravity-linux --status
@@ -118,10 +103,10 @@ bash install.sh --status
 
 ## Uninstall
 
-When installed from a published URL:
+Once installed:
 
 ```bash
-sudo antigravity-linux --uninstall
+antigravity-linux --uninstall
 ```
 
 For local-checkout installs without a stored installer URL, use the local script:
@@ -226,7 +211,7 @@ This installer uses `sudo` because it installs system-wide files under `/opt`, `
 For safer review before running:
 
 ```bash
-curl -fsSL "https://ongtungduong.github.io/antigravity-for-linux/install.sh" -o install.sh
+curl -fsSL "https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh" -o install.sh
 less install.sh
 sudo bash install.sh --all
 ```

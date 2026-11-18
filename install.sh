@@ -18,7 +18,8 @@ DO_STATUS=0
 DO_PRINT_DOWNLOADS=0
 FORCE=0
 YES=0
-INSTALLER_URL="${ANTIGRAVITY_LINUX_INSTALLER_URL:-}"
+DEFAULT_INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh"
+INSTALLER_URL="${ANTIGRAVITY_LINUX_INSTALLER_URL:-$DEFAULT_INSTALLER_URL}"
 PROXY_URL=""
 
 log() { printf '%s\n' "$*"; }
@@ -55,12 +56,11 @@ Options:
   -y, --yes              Non-interactive; assume yes where possible
   -h, --help             Show this help
 
-Recommended GitHub Pages one-liner:
-  INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"; \
-  curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+One-liner (asks for sudo itself):
+  curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
 
 Update after install:
-  sudo antigravity-linux update --all
+  antigravity-linux update --all
 USAGE
 }
 
@@ -122,10 +122,21 @@ require_root_or_reexec() {
   if [ "$(id -u)" -eq 0 ]; then
     return 0
   fi
-  if command -v sudo >/dev/null 2>&1 && [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" != "bash" ] && [ "${BASH_SOURCE[0]}" != "sh" ]; then
-    exec sudo env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
+  command -v sudo >/dev/null 2>&1 || err "System-wide install needs root, and sudo was not found. Run this script as root."
+  local script="${BASH_SOURCE[0]:-}" tmp="" rc=0
+  # When piped (curl | bash) there is no script file to re-run, so fetch a copy.
+  if [ ! -f "$script" ] || [ ! -r "$script" ]; then
+    need curl
+    tmp=$(mktemp "${TMPDIR:-/tmp}/$PROJECT_NAME-install.XXXXXX")
+    curl -fsSL --retry 3 -o "$tmp" "$INSTALLER_URL" \
+      || { rm -f "$tmp"; err "Could not download $INSTALLER_URL"; }
+    script="$tmp"
   fi
-  err "System-wide install needs root. Use: curl -fsSL <installer-url> | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL=<installer-url> bash"
+  # sudo drops the environment (sudo-rs has no -E), so pass what we need explicitly.
+  sudo env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" \
+    bash "$script" "${ORIGINAL_ARGS[@]}" || rc=$?
+  [ -z "$tmp" ] || rm -f "$tmp"
+  exit "$rc"
 }
 
 install_deps_debian() {
@@ -446,16 +457,8 @@ install_manager_command() {
 #!/usr/bin/env bash
 set -euo pipefail
 SCRIPT_URL="$installer_url"
-if [ -z "\$SCRIPT_URL" ]; then
-  echo "No installer URL was stored." >&2
-  echo "Reinstall with ANTIGRAVITY_LINUX_INSTALLER_URL set, or run install.sh locally." >&2
-  exit 1
-fi
-if [ "\$(id -u)" -eq 0 ]; then
-  curl -fsSL "\$SCRIPT_URL" | env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" bash -s -- "\$@"
-else
-  curl -fsSL "\$SCRIPT_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" http_proxy="\${http_proxy:-\${HTTP_PROXY:-}}" https_proxy="\${https_proxy:-\${HTTPS_PROXY:-}}" bash -s -- "\$@"
-fi
+# install.sh elevates with sudo by itself.
+curl -fsSL "\$SCRIPT_URL" | env ANTIGRAVITY_LINUX_INSTALLER_URL="\$SCRIPT_URL" bash -s -- "\$@"
 SH
   chmod +x /usr/local/bin/antigravity-linux
   cat > /usr/local/bin/update-antigravity <<'SH'
@@ -526,12 +529,8 @@ print_success_summary() {
   log ""
   log "Manage:"
   log "- Status:    antigravity-linux --status"
-  log "- Update:    sudo antigravity-linux update --all"
-  log "- Uninstall: sudo antigravity-linux --uninstall"
-  if [ -z "$INSTALLER_URL" ]; then
-    log ""
-    log "Note: antigravity-linux was installed without a stored URL. Re-run this local script for updates or reinstall from a published URL."
-  fi
+  log "- Update:    antigravity-linux update --all"
+  log "- Uninstall: antigravity-linux --uninstall"
   if [ "$INSTALL_IDE" -eq 1 ]; then
     log ""
     log "Folder open integration: use your file manager's Open With menu, or Nautilus context menu after restarting Files."

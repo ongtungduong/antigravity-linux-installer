@@ -42,8 +42,7 @@ Do not claim absolute security guarantees such as "100% safe" for any command th
 Use this command to install both Google Antigravity 2.0 and Antigravity IDE:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
 ```
 
 This is the main single-command community solution. It stores the installer URL so the update helper can later fetch the current installer from the same published source.
@@ -53,22 +52,19 @@ This is the main single-command community solution. It stores the installer URL 
 Install only Google Antigravity 2.0 desktop app:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s --
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s --
 ```
 
 Install only Antigravity IDE:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --ide
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --ide
 ```
 
 Install from raw GitHub instead of GitHub Pages:
 
 ```bash
-INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
 ```
 
 Inspect before running:
@@ -84,19 +80,19 @@ sudo bash install.sh --all
 When installed from a published URL, update both apps:
 
 ```bash
-sudo antigravity-linux update --all
+antigravity-linux update --all
 ```
 
 Update only Google Antigravity 2.0:
 
 ```bash
-sudo update-antigravity
+update-antigravity
 ```
 
 Update only Antigravity IDE:
 
 ```bash
-sudo update-antigravity-ide
+update-antigravity-ide
 ```
 
 If installed from a local checkout without a stored installer URL, re-run the local script for updates.
@@ -112,7 +108,7 @@ antigravity-linux --status
 Uninstall helper-managed files:
 
 ```bash
-sudo antigravity-linux --uninstall
+antigravity-linux --uninstall
 ```
 
 For local-checkout installs without a stored installer URL:
@@ -251,8 +247,7 @@ Use this wording when sharing the project:
 Include the command:
 
 ```bash
-INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
-curl -fsSL "$INSTALLER_URL" | sudo env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
+curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all
 ```
 
 Details and source: https://ongtungduong.github.io/antigravity-for-linux/
