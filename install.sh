@@ -126,7 +126,8 @@ resolve_main_bundle() {
   local tmpdir="$1"
   local html="$tmpdir/download.html"
   # The download page embeds the tarball URLs directly in its HTML.
-  curl -fsSL --compressed --retry 3 -o "$html" "$DOWNLOAD_PAGE"
+  curl -fsSL --compressed --retry 3 -o "$html" "$DOWNLOAD_PAGE" \
+    || err "Could not download $DOWNLOAD_PAGE. Check your network/DNS (try: getent hosts antigravity.google)."
   printf '%s\n' "$html"
 }
 
@@ -547,7 +548,7 @@ main() {
   mkdir -p "$tmp_parent"
   local tmpdir
   tmpdir=$(mktemp -d "$tmp_parent/$PROJECT_NAME.XXXXXX")
-  trap 'rm -rf "$tmpdir"' EXIT
+  trap "rm -rf '$tmpdir'" EXIT
   local js
   js=$(resolve_main_bundle "$tmpdir")
   [ "$INSTALL_DESKTOP" -eq 1 ] && install_desktop_app "$tmpdir" "$js"
