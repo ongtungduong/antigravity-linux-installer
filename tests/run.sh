@@ -7,7 +7,6 @@ set -uo pipefail
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 HELPER="$ROOT/antigravity-linux"
-INSTALLER="$ROOT/install.sh"
 FIX="$ROOT/tests/fixtures"
 ORIG_PATH=$PATH
 SCRATCH=$(mktemp -d)
@@ -47,6 +46,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 case "$url" in
+  */google-versions/versions.txt) [ -f "$T/versions.txt" ] || exit 22; cp "$T/versions.txt" "$out" ;;
   */download) cp "$FIX/download.html" "$out" ;;
   *"Antigravity%20IDE.tar.gz") cp "$T/ide.tar.gz" "$out" ;;
   *Antigravity.tar.gz) cp "$T/desktop.tar.gz" "$out" ;;
@@ -224,23 +224,6 @@ t_uninstall_only_removes_what_we_installed() {
   assert_no_file "$OPT_DIR/antigravity"
   assert_file "$OPT_DIR/antigravity-ide/user-file"
 }
-t_ref_env_selects_helper_url() {
-  ANTIGRAVITY_LINUX_REF=v1.2.3 source "$HELPER"
-  assert_contains "$(helper_url)" "/v1.2.3/antigravity-linux"
-}
-t_ref_defaults_to_main() {
-  unset ANTIGRAVITY_LINUX_REF
-  source "$HELPER"
-  assert_contains "$(helper_url)" "/main/antigravity-linux"
-}
-t_ref_rejects_odd_characters() {
-  ANTIGRAVITY_LINUX_REF=v1.0 source "$HELPER"
-  helper_url >/dev/null                                  # precondition: a sane ref works
-  HELPER_REF='v1 && rm -rf /'; ( helper_url ) >/dev/null 2>&1 && return 1
-  HELPER_REF='../x';           ( helper_url ) >/dev/null 2>&1 && return 1
-  HELPER_REF='';               ( helper_url ) >/dev/null 2>&1 && return 1
-  return 0
-}
 t_cli_installer_says_when_it_runs_as_root() {
   source "$HELPER"; unset SUDO_USER
   stub curl 'exit 0'
@@ -263,37 +246,196 @@ t_status_and_help_need_no_root() {
   assert_eq "$(cat "$LOG")" ""
 }
 
-# --- install.sh bootstrap -----------------------------------------------------
+# --- self update from GitHub Releases ----------------------------------------
 
-bootstrap_stub() {
+# A fake release "v9.9.9" in $T/rel plus a curl stub that serves it.
+release_fixture() {
+  LATEST_TAG=${1:-v9.9.9}
+  mkdir -p "$T/rel/$LATEST_TAG" "$T/bin"
+  sed "s/^VERSION=\"dev\"\$/VERSION=\"$LATEST_TAG\"/" "$HELPER" > "$T/rel/$LATEST_TAG/antigravity-linux"
+  ( cd "$T/rel/$LATEST_TAG" && sha256sum antigravity-linux > SHA256SUMS )
+  export LATEST_TAG
   stub curl '
 echo "curl $*" >> "$LOG"
-out=""; while [ $# -gt 0 ]; do case "$1" in -o) out=$2; shift ;; esac; shift; done
-printf "#!/usr/bin/env bash\necho \"\$@ ref=\${ANTIGRAVITY_LINUX_REF:-}\" >> \"\$LOG\"\n" > "$out"'
+out=""; url=""; want_url=0
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out=$2; shift ;; -w) want_url=1; shift ;; https://*) url=$1 ;; esac
+  shift
+done
+case "$url" in
+  */releases/latest) [ "$want_url" -eq 1 ] && printf "https://github.com/o/r/releases/tag/%s" "$LATEST_TAG" ;;
+  */releases/download/*/*) tag=${url#*/releases/download/}; tag=${tag%%/*}; f=${url##*/}
+                           [ -f "$T/rel/$tag/$f" ] || exit 22; cp "$T/rel/$tag/$f" "$out" ;;
+  *) echo "unexpected url $url" >&2; exit 22 ;;
+esac'
 }
-t_bootstrap_downloads_and_passes_pinned_ref() {
-  bootstrap_stub
-  TMPDIR="$T" ANTIGRAVITY_LINUX_REF=v9 bash "$INSTALLER" --all
-  assert_contains "$(cat "$LOG")" "/v9/antigravity-linux"
-  assert_contains "$(cat "$LOG")" "install --all ref=v9"
+update_env() {
+  source "$HELPER"
+  HELPER_PATH="$T/bin/antigravity-linux"; ORIGINAL_ARGS=(update --all --proxy http://p:1)
+  run_updated_helper() { echo "handover $*" >> "$LOG"; }
 }
-t_bootstrap_default_is_main() {
-  bootstrap_stub
-  TMPDIR="$T" bash "$INSTALLER" --all
-  assert_contains "$(cat "$LOG")" "/main/antigravity-linux"
-  assert_contains "$(cat "$LOG")" "install --all ref="
+t_update_installs_verified_release_and_hands_over() {
+  release_fixture v9.9.9; update_env
+  self_update >/dev/null
+  cmp "$T/rel/v9.9.9/antigravity-linux" "$HELPER_PATH"
+  [ -x "$HELPER_PATH" ] || fail "installed helper not executable"
+  assert_contains "$(cat "$LOG")" "handover --all --proxy http://p:1"
+  assert_not_contains "$(cat "$LOG")" "handover update"
+  assert_eq "$(bash "$HELPER_PATH" --version)" "antigravity-linux v9.9.9"
 }
-t_bootstrap_download_has_timeouts() {
-  bootstrap_stub
-  TMPDIR="$T" bash "$INSTALLER"
-  assert_contains "$(grep '^curl' "$LOG")" "--connect-timeout"
-  assert_contains "$(grep '^curl' "$LOG")" "--max-time"
+t_update_skips_when_already_latest() {
+  release_fixture v9.9.9; update_env; VERSION=v9.9.9
+  out=$(self_update)
+  assert_contains "$out" "already the latest"
+  assert_not_contains "$(cat "$LOG")" "/releases/download/"
+  assert_not_contains "$(cat "$LOG")" "handover"
 }
-t_bootstrap_cleans_temp_file() {
-  bootstrap_stub
-  mkdir -p "$T/tmp"
-  TMPDIR="$T/tmp" bash "$INSTALLER"
-  assert_eq "$(ls -A "$T/tmp")" ""
+t_update_rejects_bad_checksum() {
+  release_fixture v9.9.9; update_env
+  echo "tampered" >> "$T/rel/v9.9.9/antigravity-linux"
+  ( self_update ) >/dev/null 2>&1 && return 1
+  assert_no_file "$HELPER_PATH"
+  assert_not_contains "$(cat "$LOG")" "handover"
+}
+t_update_rejects_missing_checksum_entry() {
+  release_fixture v9.9.9; update_env
+  echo "deadbeef  something-else" > "$T/rel/v9.9.9/SHA256SUMS"
+  ( self_update ) >/dev/null 2>&1 && return 1
+  assert_no_file "$HELPER_PATH"
+}
+t_update_rejects_invalid_shell_even_with_matching_checksum() {
+  release_fixture v9.9.9; update_env
+  printf 'if then fi (\n' > "$T/rel/v9.9.9/antigravity-linux"
+  ( cd "$T/rel/v9.9.9" && sha256sum antigravity-linux > SHA256SUMS )
+  ( self_update ) >/dev/null 2>&1 && return 1
+  assert_no_file "$HELPER_PATH"
+}
+t_update_pinned_tag_skips_latest_lookup() {
+  release_fixture v1.2.3; update_env; HELPER_REF=v1.2.3; LATEST_TAG=v9.9.9
+  self_update >/dev/null
+  assert_not_contains "$(cat "$LOG")" "/releases/latest"
+  assert_contains "$(cat "$LOG")" "/releases/download/v1.2.3/antigravity-linux"
+}
+t_update_replaces_atomically_even_when_running() {
+  release_fixture v9.9.9; update_env
+  echo "OLD-HELPER-MARKER" > "$HELPER_PATH"
+  self_update >/dev/null
+  cmp "$T/rel/v9.9.9/antigravity-linux" "$HELPER_PATH"
+  assert_no_file "$HELPER_PATH.new"
+}
+t_latest_release_tag_is_read_from_redirect() {
+  release_fixture v3.4.5; source "$HELPER"
+  assert_eq "$(latest_release_tag)" "v3.4.5"
+}
+t_latest_release_tag_rejects_odd_redirect() {
+  release_fixture v3.4.5; source "$HELPER"
+  LATEST_TAG='../evil'; export LATEST_TAG
+  ( latest_release_tag ) >/dev/null 2>&1 && return 1
+  return 0
+}
+t_pin_rejects_non_release_names() {
+  source "$HELPER"
+  HELPER_REF=v1.2.3; assert_eq "$(target_release_tag)" "v1.2.3"   # precondition
+  for bad in main '../x' 'v1 && rm -rf /' 'abc123'; do
+    HELPER_REF=$bad; ( target_release_tag ) >/dev/null 2>&1 && fail "accepted '$bad'"
+  done
+  return 0
+}
+t_version_flag_needs_no_root() {
+  stub id 'echo 1000'; stub sudo 'echo sudo >> "$LOG"; exit 1'
+  assert_eq "$(bash "$HELPER" --version)" "antigravity-linux dev"
+  assert_eq "$(bash -s -- --version < "$HELPER")" "antigravity-linux dev"   # also works piped
+  assert_eq "$(cat "$LOG")" ""
+}
+t_version_line_is_stampable_exactly_once() {
+  assert_eq "$(grep -c '^VERSION="dev"$' "$HELPER")" "1" "release.yml stamps this line"
+}
+t_no_separate_bootstrap_script() {
+  [ ! -e "$ROOT/install.sh" ] || fail "install.sh should be merged into antigravity-linux"
+}
+
+# --- tools/google-versions.sh and the version cache --------------------------
+
+t_google_versions_lists_every_product_and_platform() {
+  out=$(bash "$ROOT/tools/google-versions.sh" "$FIX/download.html")
+  assert_eq "$out" "desktop linux-x64 2.33.0-123
+desktop linux-arm 2.33.0-123
+ide linux-x64 1.2.3-45
+ide linux-arm 1.2.3-45"
+}
+t_google_versions_fails_when_a_version_is_unreadable() {
+  bash "$ROOT/tools/google-versions.sh" "$FIX/download.html" >/dev/null      # precondition
+  ( bash "$ROOT/tools/google-versions.sh" "$FIX/download-unknown-version.html" ) >/dev/null 2>&1 && return 1
+  return 0
+}
+t_google_versions_fails_when_a_platform_is_missing() {
+  ( bash "$ROOT/tools/google-versions.sh" "$FIX/download-unknown-layout.html" ) >/dev/null 2>&1 && return 1
+  return 0
+}
+
+# Install a desktop 2.33.0-123 into the sandbox and describe Google's latest in the cache.
+cache_env() {
+  source "$HELPER"; sandbox_system; make_desktop_tarball
+  TMPDIR="$T" main --desktop --no-apt --no-nautilus >/dev/null
+  : > "$LOG"
+  AG_PLATFORM=linux-x64; DESKTOP_TOP=$DESKTOP_TOP_FOR_TEST
+  INSTALL_DESKTOP=1; INSTALL_IDE=0; FORCE=0; INSTALL_CLI=0; USE_CACHE=1
+  export TMPDIR="$T"
+}
+write_cache() { printf '%s\n' "$@" > "$T/versions.txt"; }
+
+t_cache_says_current_when_installed_matches() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-123" "ide linux-x64 1.2.3-45"
+  up_to_date_per_cache
+  assert_not_contains "$(cat "$LOG")" "/download"       # never asked Google
+}
+t_cache_does_not_skip_when_google_has_a_newer_build() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-999"
+  ! up_to_date_per_cache
+}
+t_cache_does_not_skip_when_the_product_line_is_missing() {
+  cache_env; write_cache "ide linux-x64 1.2.3-45"
+  ! up_to_date_per_cache
+}
+t_cache_requires_every_selected_product_to_be_current() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-123" "ide linux-x64 1.2.3-45"
+  up_to_date_per_cache                                  # precondition: desktop alone is current
+  INSTALL_IDE=1                                         # IDE is not installed
+  ! up_to_date_per_cache
+}
+t_cache_unreachable_falls_back_to_the_normal_path() {
+  cache_env; rm -f "$T/versions.txt"
+  ! up_to_date_per_cache
+}
+t_cache_is_ignored_for_force_no_cache_and_cli() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-123"
+  up_to_date_per_cache                                  # precondition
+  FORCE=1;     ! up_to_date_per_cache; FORCE=0
+  USE_CACHE=0; ! up_to_date_per_cache; USE_CACHE=1
+  INSTALL_CLI=1; ! up_to_date_per_cache
+}
+t_cache_cannot_make_an_unknown_version_current() {
+  cache_env; write_cache "desktop linux-x64 unknown"
+  printf 'unknown\n' > "$OPT_DIR/antigravity/.antigravity-linux-version"
+  ! up_to_date_per_cache
+}
+t_update_does_nothing_when_the_cache_says_current() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-123"
+  self_update() { :; }                                  # helper self-update is covered elsewhere
+  out=$(main update --desktop)
+  assert_contains "$out" "already up to date"
+  assert_eq "$(cat "$LOG" | grep -c '/download$' || true)" "0" "must not fetch Google's page"
+}
+t_update_continues_when_the_cache_is_behind() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-999"
+  self_update() { :; }
+  main update --desktop --no-apt >/dev/null
+  assert_contains "$(cat "$LOG")" "/download"           # went to Google and compared there
+}
+t_install_ignores_the_cache() {
+  cache_env; write_cache "desktop linux-x64 2.33.0-123"
+  main install --desktop --no-apt --no-nautilus >/dev/null
+  assert_contains "$(cat "$LOG")" "/download"
 }
 
 # --- end to end (everything redirected into $T) ------------------------------
