@@ -1,55 +1,16 @@
-# Antigravity Linux Installer
+# Antigravity for Linux
 
-```
- █████╗ ███╗   ██╗████████╗██╗ ██████╗ ██████╗  █████╗ ██╗   ██╗██╗████████╗██╗   ██╗
-██╔══██╗████╗  ██║╚══██╔══╝██║██╔════╝ ██╔══██╗██╔══██╗██║   ██║██║╚══██╔══╝╚██╗ ██╔╝
-███████║██╔██╗ ██║   ██║   ██║██║  ███╗██████╔╝███████║██║   ██║██║   ██║    ╚████╔╝
-██╔══██║██║╚██╗██║   ██║   ██║██║   ██║██╔══██╗██╔══██║╚██╗ ██╔╝██║   ██║     ╚██╔╝
-██║  ██║██║ ╚████║   ██║   ██║╚██████╔╝██║  ██║██║  ██║ ╚████╔╝ ██║   ██║      ██║
-╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝ ╚═════╝ ╚═╝  ╚═╝╚═╝  ╚═╝  ╚═══╝  ╚═╝   ╚═╝      ╚═╝
+One-command installer/updater for **Google Antigravity 2.0** and **Antigravity IDE** on Linux, using Google's official tarballs.
 
-                   ██╗     ██╗███╗   ██╗██╗   ██╗██╗  ██╗
-                   ██║     ██║████╗  ██║██║   ██║╚██╗██╔╝
-                   ██║     ██║██╔██╗ ██║██║   ██║ ╚███╔╝
-                   ██║     ██║██║╚██╗██║██║   ██║ ██╔██╗
-                   ███████╗██║██║ ╚████║╚██████╔╝██╔╝ ██╗
-                   ╚══════╝╚═╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝  ╚═╝
-```
+> Community helper. Not affiliated with, endorsed by, or supported by Google. It does not mirror or modify Antigravity: the latest official tarball is resolved from <https://antigravity.google/download> at install time.
 
-> **This is a community helper. Not affiliated with, endorsed by, or supported by Google.**
-
-One-command Linux installer/updater for **Google Antigravity 2.0** and **Antigravity IDE** using Google's official tarball downloads.
-
-This project does **not** mirror, modify, or redistribute Google Antigravity. The installer resolves the latest official Google tarball from [https://antigravity.google/download](https://antigravity.google/download) at install/update time, then adds Linux desktop integration around it.
-
-
-## Features
-
-- Installs the latest official Antigravity 2.0 Linux tarball.
-- Optionally installs Antigravity IDE.
-- Supports x86_64 and ARM64 Linux builds when Google provides them.
-- Installs app menu launchers.
-- Installs icons when available from the tarball.
-- Adds command-line launchers:
-  - `antigravity`
-  - `antigravity-ide`
-- Adds update helper:
-  - `antigravity-linux update --all`
-- Adds folder opening integration for IDE:
-  - file manager `Open With` support through `.desktop` MIME entries
-  - optional GNOME Files/Nautilus right-click menu helper
-- Preserves the Electron/Chromium sandbox permission model instead of launching with `--no-sandbox` by default.
-
-## Minimum Requirements
-> `glibc >= 2.28, glibcxx >= 3.4.25 (e.g. Ubuntu 20. Debian 10, Fedora 36, RHEL 8)`
-
-## Quick install
+## Install
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash
 ```
 
-The script asks for `sudo` itself. By default it installs the Antigravity 2.0 desktop app. Pass flags after `bash -s --`:
+The script asks for `sudo` itself and installs the Antigravity 2.0 desktop app. Pass flags after `bash -s --`:
 
 ```bash
 # Desktop app + IDE
@@ -57,70 +18,25 @@ curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/
 
 # IDE only
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --ide
-```
 
-### Behind a proxy
-
-If `antigravity.google` cannot be resolved directly, add `--proxy`:
-
-```bash
+# Behind a proxy
 curl -fsSL https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh | bash -s -- --all --proxy http://HOST:PORT
 ```
 
-## Update
+Prefer to read it first? Download `install.sh`, review it, then run `bash install.sh --all`.
 
-Once installed:
-
-```bash
-antigravity-linux update --all
-```
-
-Desktop app only:
+## Manage
 
 ```bash
-update-antigravity
+antigravity-linux update --all   # update (or: update-antigravity, update-antigravity-ide)
+antigravity-linux --status       # show installed apps and versions
+antigravity-linux --uninstall    # remove helper-managed files (user settings are kept)
 ```
-
-IDE only:
-
-```bash
-update-antigravity-ide
-```
-
-## Status
-
-Once installed:
-
-```bash
-antigravity-linux --status
-```
-
-For local-checkout installs without a stored installer URL, use the local script:
-
-```bash
-bash install.sh --status
-```
-
-## Uninstall
-
-Once installed:
-
-```bash
-antigravity-linux --uninstall
-```
-
-For local-checkout installs without a stored installer URL, use the local script:
-
-```bash
-sudo bash install.sh --uninstall
-```
-
-The uninstall removes helper-managed files from `/opt`, `/usr/local/bin`, `/usr/share/applications`, `/usr/share/icons`, and the Nautilus extension path. It does not delete user settings in home directories.
 
 ## Options
 
 ```text
---desktop          Install/update Antigravity 2.0 desktop app only
+--desktop          Install/update Antigravity 2.0 desktop app only (default)
 --ide              Install/update Antigravity IDE only
 --all              Install/update desktop app + IDE
 --cli              Also run Google's official Antigravity CLI installer
@@ -141,92 +57,18 @@ The uninstall removes helper-managed files from `/opt`, `/usr/local/bin`, `/usr/
 |---|---|
 | Antigravity 2.0 | `/opt/antigravity` |
 | Antigravity IDE | `/opt/antigravity-ide` |
-| CLI launchers | `/usr/local/bin/antigravity`, `/usr/local/bin/antigravity-ide` |
+| Launchers | `/usr/local/bin/antigravity`, `/usr/local/bin/antigravity-ide` |
 | Update helper | `/usr/local/bin/antigravity-linux` |
-| App launchers | `/usr/share/applications/antigravity*.desktop` |
+| App menu entries | `/usr/share/applications/antigravity*.desktop` |
 | Icons | `/usr/share/icons/hicolor/512x512/apps/` |
-| Nautilus extension | `/usr/share/nautilus-python/extensions/open-in-antigravity-ide.py` |
+| Nautilus extension (IDE) | `/usr/share/nautilus-python/extensions/open-in-antigravity-ide.py` |
 
-## Supported systems
+The Electron/Chromium sandbox is preserved (`chrome-sandbox` set to `root:root`, mode `4755`); no `--no-sandbox` launchers.
 
-Designed for Debian/Ubuntu-based distributions with `apt-get`.
+## Requirements
 
-The script can also run on other Linux distributions if the required tools already exist:
-
-- `bash`
-- `curl`
-- `tar`
-- `python3`
-- `desktop-file-utils`
-- `xdg-utils`
-
-GNOME Files/Nautilus integration additionally needs `python3-nautilus`.
-
-## GitHub Pages setup
-
-This repository includes a GitHub Actions workflow at `.github/workflows/pages.yml` that deploys the `docs/` directory to GitHub Pages.
-
-1. Use this repository, `ongtungduong/antigravity-for-linux`, or fork it under your own account.
-2. Push your changes to the `main` branch.
-3. Open **Settings → Pages**.
-4. Set **Build and deployment → Source** to **GitHub Actions**.
-5. Run or wait for the **Deploy GitHub Pages** workflow.
-6. Your installer will be available at:
-
-```text
-https://ongtungduong.github.io/antigravity-for-linux/install.sh
-```
-
-## Local development
-
-Clone the repository:
-
-```bash
-git clone https://github.com/ongtungduong/antigravity-for-linux.git
-cd antigravity-for-linux
-```
-
-Run local checks:
-
-```bash
-bash scripts/check.sh
-```
-
-Sync the GitHub Pages copy of the installer:
-
-```bash
-bash scripts/sync-site.sh
-```
-
-Install from the local checkout:
-
-```bash
-sudo bash install.sh --all
-```
-
-## Security notes
-
-This installer uses `sudo` because it installs system-wide files under `/opt`, `/usr/local/bin`, `/usr/share/applications`, and `/usr/share/icons`.
-
-For safer review before running:
-
-```bash
-curl -fsSL "https://raw.githubusercontent.com/ongtungduong/antigravity-for-linux/main/install.sh" -o install.sh
-less install.sh
-sudo bash install.sh --all
-```
-
-## Contributing
-
-Contributions are welcome! Please open an issue or submit a pull request.
-
-> Read the [contributing guidelines](CONTRIBUTING.md) for more information.
-
-The easiest way to contribute is to check whether this works smoothly on your OS and if any issues arise, [open an issue](https://github.com/ongtungduong/antigravity-for-linux/issues/new), describe the problem, your system details, and screenshots (if possible).
-
-### Currently Confirmed OSes
-
-- Ubuntu 24 (LTS)
+- x86_64 or ARM64 Linux, `glibc >= 2.28` (e.g. Ubuntu 20.04, Debian 10, Fedora 36, RHEL 8)
+- Debian/Ubuntu (`apt-get`) installs dependencies automatically. Elsewhere, have `bash`, `curl`, `tar`, `python3`, `desktop-file-utils` and `xdg-utils` installed and use `--no-apt`. Nautilus integration also needs `python3-nautilus`.
 
 ## License
 

@@ -1,5 +1,0 @@
-User-agent: *
-Allow: /
-Allow: /llms.txt
-
-# LLM context: https://ongtungduong.github.io/antigravity-for-linux/llms.txt

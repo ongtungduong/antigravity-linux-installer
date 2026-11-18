@@ -4,18 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
-  workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  shell-checks:
+  check:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run repository checks
-        run: bash scripts/check.sh
+      - uses: actions/checkout@v4
+      - run: bash -n install.sh
+      - run: bash install.sh --status
