@@ -19,6 +19,7 @@ DO_PRINT_DOWNLOADS=0
 FORCE=0
 YES=0
 INSTALLER_URL="${ANTIGRAVITY_LINUX_INSTALLER_URL:-}"
+PROXY_URL=""
 
 log() { printf '%s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
@@ -46,6 +47,7 @@ Options:
   --no-nautilus          Skip GNOME Files/Nautilus context-menu helper
   --no-apt               Do not install apt dependencies automatically
   --force                Reinstall even when the recorded version matches
+  --proxy URL            Route all downloads through this HTTP(S) proxy
   --install-url URL      Store URL used by the antigravity-linux update command
   --status               Show installed helper-managed apps and versions
   --print-downloads      Print the resolved official Google tarball URLs
@@ -72,6 +74,11 @@ while [ $# -gt 0 ]; do
     --no-nautilus) INSTALL_NAUTILUS=0 ;;
     --no-apt) INSTALL_DEPS=0 ;;
     --force) FORCE=1 ;;
+    --proxy)
+      shift
+      [ $# -gt 0 ] || err "--proxy needs a URL"
+      PROXY_URL="$1"
+      ;;
     --install-url)
       shift
       [ $# -gt 0 ] || err "--install-url needs a URL"
@@ -86,6 +93,20 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+# Proxy: an explicit --proxy wins; otherwise fill in whichever of the
+# upper/lower-case variables is missing (an empty lowercase value can shadow
+# the uppercase one, and sudo may only pass one of them through).
+if [ -n "$PROXY_URL" ]; then
+  http_proxy="$PROXY_URL"; https_proxy="$PROXY_URL"
+else
+  http_proxy="${http_proxy:-${HTTP_PROXY:-}}"
+  https_proxy="${https_proxy:-${HTTPS_PROXY:-${http_proxy:-}}}"
+fi
+if [ -n "$https_proxy" ] || [ -n "$http_proxy" ]; then
+  HTTP_PROXY="$http_proxy"; HTTPS_PROXY="$https_proxy"
+  export http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+fi
 
 if [ "$(uname -s)" != "Linux" ]; then
   err "This installer is for Linux only."
@@ -102,7 +123,7 @@ require_root_or_reexec() {
     return 0
   fi
   if command -v sudo >/dev/null 2>&1 && [ -n "${BASH_SOURCE[0]:-}" ] && [ -r "${BASH_SOURCE[0]}" ] && [ "${BASH_SOURCE[0]}" != "bash" ] && [ "${BASH_SOURCE[0]}" != "sh" ]; then
-    exec sudo -E env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
+    exec sudo -E env "ANTIGRAVITY_LINUX_INSTALLER_URL=$INSTALLER_URL" "http_proxy=${http_proxy:-}" "https_proxy=${https_proxy:-}" bash "${BASH_SOURCE[0]}" "${ORIGINAL_ARGS[@]}"
   fi
   err "System-wide install needs root. Use: curl -fsSL <installer-url> | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL=<installer-url> bash"
 }

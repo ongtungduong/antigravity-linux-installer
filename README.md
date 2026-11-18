@@ -73,6 +73,15 @@ INSTALLER_URL="https://raw.githubusercontent.com/ongtungduong/antigravity-for-li
 curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all
 ```
 
+## Behind a proxy
+
+If `antigravity.google` cannot be resolved directly, pass your proxy (`sudo` may drop proxy variables):
+
+```bash
+INSTALLER_URL="https://ongtungduong.github.io/antigravity-for-linux/install.sh"
+curl -fsSL "$INSTALLER_URL" | sudo -E env ANTIGRAVITY_LINUX_INSTALLER_URL="$INSTALLER_URL" bash -s -- --all --proxy http://HOST:PORT
+```
+
 ## Update
 
 Once installed from a published URL:
@@ -133,6 +142,7 @@ The uninstall removes helper-managed files from `/opt`, `/usr/local/bin`, `/usr/
 --no-nautilus      Skip GNOME Files/Nautilus context-menu helper
 --no-apt           Do not install apt dependencies automatically
 --force            Reinstall even when the recorded version matches
+--proxy URL        Route all downloads through this HTTP(S) proxy
 --install-url URL  Store URL used by the antigravity-linux update command
 --status           Show installed helper-managed apps and versions
 --print-downloads  Print resolved official Google tarball URLs
